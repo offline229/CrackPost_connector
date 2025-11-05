@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>CrackPost Visualization — Canvas High-Perf</title>
+
+    <!-- 如果你需要完全本地化，请下载 d3.v7.min.js 到本目录并将下面这行替换成本地引用（例如 ./libs/d3.v7.min.js） -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Rajdhani', 'Roboto', sans-serif;
+            width: 100vw;
+            height: 100vh;
+        }
+        #visualization {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        /* Canvas 覆盖在该容器内 */
+        canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px 12px;
+            background: rgba(0, 180, 255, 0.2);
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            border-radius: 4px;
+            pointer-events: none;
+            color: #00f7ff;
+            font-size: 14px;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+            transition: all 0.12s ease;
+            opacity: 0;
+            z-index: 1000;
+        }
+
+        /* 复用你原来的样式（控件/标题/面板）——未变 */
+        .grid-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 200, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 200, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+        }
+        h1 {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(0, 200, 255, 0.8);
+            font-weight: 300;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin: 0;
+            padding: 10px 20px;
+            border-bottom: 1px solid rgba(0, 200, 255, 0.3);
+            background: rgba(0, 20, 40, 0.3);
+            backdrop-filter: blur(5px);
+            border-radius: 4px;
+            z-index: 100;
+        }
+        .controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 800px;
+            background: rgba(0, 20, 40, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 100;
+        }
+        /* 剩余控件样式复用（和原文件一样） */
+        .time-slider { width: 100%; margin: 10px 0; }
+        .slider-container { width: 100%; display:flex; align-items:center; margin-top:5px; }
+        .time-slider { -webkit-appearance:none; appearance:none; width:90%; height:6px; background: rgba(0,120,180,0.3); border-radius:3px; outline:none;}
+        .time-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; background: rgb(0,200,255); border-radius:50%; cursor:pointer; box-shadow:0 0 10px rgba(0,200,255,0.8); }
+        .time-display { color: rgba(0,200,255,0.8); font-size:14px; margin-left:15px; min-width:100px; text-align:left;}
+        .button-container{ display:flex; justify-content:center; margin-top:10px; }
+        .control-button{ background: rgba(0,100,150,0.4); border:1px solid rgba(0,200,255,0.4); color: rgba(0,220,255,0.9); padding:8px 15px; margin:0 5px; border-radius:5px; cursor:pointer; transition:all 0.2s ease; font-family:inherit; outline:none;}
+        .control-button:hover{ background: rgba(0,150,200,0.5); box-shadow: 0 0 15px rgba(0,200,255,0.5);}
+        .control-button:active{ background: rgba(0,180,230,0.6);}
+        .speed-control{ display:flex; align-items:center; margin-top:5px; }
+        .speed-label{ color: rgba(0,200,255,0.8); font-size:14px; margin-right:10px; }
+        .speed-options{ display:flex; }
+        .speed-option{ padding:3px 8px; margin:0 3px; border-radius:3px; color: rgba(0,200,255,0.6); cursor:pointer; font-size:12px; border:1px solid transparent; }
+        .speed-option.active{ border-color: rgba(0,200,255,0.6); color: rgba(0,220,255,0.9); }
+
+    </style>
+</head>
+<body>
+    <div class="grid-background"></div>
+    <h1>CrackPost Visualization</h1>
+    <div class="tooltip"></div>
+    <div id="visualization"></div>
+
+    <div class="controls">
+        <div class="slider-container">
+            <input type="range" min="0" max="100" value="100" class="time-slider" id="timeSlider">
+            <div class="time-display" id="timeDisplay">All Data</div>
+        </div>
+        <div class="button-container">
+            <button class="control-button" id="playButton">▶ Play</button>
+            <button class="control-button" id="resetButton">↺ Reset</button>
+        </div>
+        <div class="speed-control">
+            <div class="speed-label">Speed:</div>
+            <div class="speed-options">
+                <div class="speed-option" data-speed="0.5">0.5x</div>
+                <div class="speed-option active" data-speed="1">1x</div>
+                <div class="speed-option" data-speed="2">2x</div>
+                <div class="speed-option" data-speed="5">5x</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // === 核心设计说明（简短） ===
+    // 1) 保留你的数据加载/解析/处理函数（loadEmailData/processEmailData）和大多数业务逻辑不变。
+    // 2) 把所有渲染从 SVG 改为单一 Canvas（批绘制），从而能支持数百至上千条线。
+    // 3) 使用 d3.forceSimulation 进行布局（保持与你原代码相同的力/配置）。
+    // 4) Canvas 上实现鼠标拾取（近似：按节点半径检测），拖拽，hover tooltip。
+    // 5) 若需完全离线：下载 d3.v7.min.js 并本地引用（上方注释说明）。
+
+    /* --------------------  基础：保持原有数据加载/处理逻辑 -------------------- */
+    async function loadEmailData() {
+        try {
+            const response = await fetch('./email/global_result.tsv');
+            const data = await response.text();
+            const lines = data.trim().split('\n');
+
+            const ocLine = lines[0];
+            const ocMatch = ocLine.match(/oc_registerdata\s+(.*)/);
+            const ocData = [];
+
+            if (ocMatch && ocMatch[1]) {
+                const ocEntries = ocMatch[1].split(',');
+                ocEntries.forEach(entry => {
+                    if (entry.trim()) {
+                        const [name, date] = entry.split('_');
+                        ocData.push({
+                            name: name.trim(),
+                            registerDate: date ? date.trim() : new Date().toISOString().slice(0, 10)
+                        });
+                    }
+                });
+            }
+
+            const emailData = [];
+            for (let i = 2; i < lines.length; i++) {
+                const cols = lines[i].split('\t');
+                if (cols.length >= 6) {
+                    emailData.push({
+                        sendType: cols[0].trim(),
+                        date: cols[1].trim(),
+                        sender: cols[2].trim(),
+                        receiver: cols[3].trim(),
+                        letterType: cols[4].trim(),
+                        path: cols[5].trim()
+                    });
+                }
+            }
+
+            console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
+            return { ocData, emailData };
+        } catch (error) {
+            console.error('加载邮件数据失败:', error);
+            return { ocData: [], emailData: [] };
+        }
+    }
+
+    function processEmailData(ocData, emailData) {
+        const ocNames = ocData.map(oc => oc.name);
+        const userFirstSeen = new Map();
+
+        emailData.forEach(email => {
+            if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
+                userFirstSeen.set(email.sender, email.date);
+            }
+            if (email.receiver && (!userFirstSeen.has(email.receiver) || new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
+                userFirstSeen.set(email.receiver, email.date);
+            }
+        });
+
+        const usersData = [];
+        ocData.forEach(oc => {
+            usersData.push({
+                name: oc.name,
+                email: `${oc.name}@example.com`,
+                registerDate: oc.registerDate,
+                isOC: true
+            });
+        });
+
+        userFirstSeen.forEach((firstSeenDate, userName) => {
+            if (!ocNames.includes(userName) && userName) {
+                usersData.push({
+                    name: userName,
+                    email: `${userName}@example.com`,
+                    registerDate: firstSeenDate,
+                    isOC: false
+                });
+            }
+        });
+
+        const lettersData = [];
+        const ocSentHistory = [];
+        emailData.forEach(email => {
+            if (ocNames.includes(email.sender)) {
+                ocSentHistory.push({
+                    sender: email.sender,
+                    date: email.date
+                });
+            }
+        });
+        ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        function findRelevantOCs(date, ocHistory) {
+            const emailDate = new Date(date);
+            const relevantOCs = [];
+            for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
+                const ocDate = new Date(ocHistory[i].date);
+                if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
+                    relevantOCs.push(ocHistory[i].sender);
+                }
+            }
+            return relevantOCs;
+        }
+
+        emailData.forEach(email => {
+            const letterTypeMatch = email.letterType.match(/^([ABC])(\d*|[\u4e00-\u9fa5]+)/i);
+            if (!letterTypeMatch) return;
+            const letterType = letterTypeMatch[1].toUpperCase();
+            const letterNumber = letterTypeMatch[0];
+            const isOCSender = ocNames.includes(email.sender);
+
+            if (isOCSender) {
+                if (letterType === 'A') return;
+                else if (letterType === 'B') {
+                    lettersData.push({
+                        sender: email.sender,
+                        type: letterType,
+                        number: letterNumber,
+                        date: email.date,
+                        receivers: [],
+                        isOCSender: true,
+                        isBroadcast: true
+                    });
+                } else if (letterType === 'C') {
+                    if (email.receiver) {
+                        lettersData.push({
+                            sender: email.sender,
+                            type: letterType,
+                            number: letterNumber,
+                            date: email.date,
+                            receivers: [email.receiver],
+                            isOCSender: true
+                        });
+                    }
+                }
+            } else {
+                if (letterType === 'A') {
+                    lettersData.push({
+                        sender: email.sender,
+                        type: letterType,
+                        number: letterNumber,
+                        date: email.date,
+                        receivers: [],
+                        isOCSender: false
+                    });
+                } else if (letterType === 'B') {
+                    const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
+                    if (relevantOCs.length > 0) {
+                        lettersData.push({
+                            sender: email.sender,
+                            type: letterType,
+                            number: letterNumber,
+                            date: email.date,
+                            receivers: relevantOCs,
+                            isOCSender: false
+                        });
+                    }
+                } else if (letterType === 'C') {
+                    if (email.receiver) {
+                        lettersData.push({
+                            sender: email.sender,
+                            type: letterType,
+                            number: letterNumber,
+                            date: email.date,
+                            receivers: [email.receiver],
+                            isOCSender: false
+                        });
+                    }
+                }
+            }
+        });
+
+        return { usersData, lettersData };
+    }
+
+    /* --------------------  Canvas 渲染与高性能实现 -------------------- */
+    async function initVisualization() {
+        const { ocData, emailData } = await loadEmailData();
+
+        let usersData = [];
+        let lettersData = [];
+
+        if (ocData.length > 0 || emailData.length > 0) {
+            const processedData = processEmailData(ocData, emailData);
+            usersData = processedData.usersData;
+            lettersData = processedData.lettersData;
+            console.log("使用实际数据");
+        } else {
+            usersData = [
+                { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
+                { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
+                { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
+                { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
+                { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
+            ];
+            lettersData = [
+                { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1", "OC2"], isOCSender: false },
+                { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
+                { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
+                { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
+                { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
+            ];
+            console.log("使用模拟数据");
+        }
+
+        // 时间范围
+        const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
+        const minDate = new Date(allDates[0]);
+        const maxDate = new Date(allDates[allDates.length - 1]);
+        let currentDate = new Date(maxDate);
+        let playInterval = null;
+        let playSpeed = 1;
+
+        // Canvas setup
+        const container = document.getElementById('visualization');
+        // 创建 canvas 元素（覆盖整个容器）
+        const canvas = document.createElement('canvas');
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.width = window.innerWidth * devicePixelRatio;
+        canvas.height = window.innerHeight * devicePixelRatio;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        container.appendChild(canvas);
+        const ctx = canvas.getContext('2d', { alpha: true });
+
+        // 设备像素比调整
+        const DPR = devicePixelRatio || 1;
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+        // dimensions
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        const centerX = () => width / 2;
+        const centerY = () => height / 2;
+
+        // time scale 用于 X 布局（与原版一致）
+        const leftMargin = width * 0.05;
+        const rightMargin = width * 0.95;
+        const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
+        const timeScale = d3.scaleTime()
+            .domain(dateExtent)
+            .range([leftMargin, rightMargin]);
+
+        // 创建节点对象
+        const nodes = usersData.map((user, i) => {
+            const registerDate = new Date(user.registerDate);
+            const x = timeScale(registerDate);
+            const yRandom = Math.random() * (height - 200) + 100;
+            return {
+                id: user.name,
+                name: user.name,
+                email: user.email,
+                registerDate: user.registerDate,
+                registerDateObj: registerDate,
+                x: x,
+                y: yRandom,
+                fx: x,
+                fy: yRandom,
+                type: "user",
+                isOC: user.isOC || false,
+                visible: true,
+                r: user.isOC ? 13 : 8
+            };
+        });
+
+        // 构造连接数据（与原逻辑保持一致）
+        const connectionCounts = {};
+        lettersData.forEach(letter => {
+            (letter.receivers || []).forEach(receiver => {
+                const key = letter.sender < receiver ? `${letter.sender}|${receiver}` : `${receiver}|${letter.sender}`;
+                if (!connectionCounts[key]) connectionCounts[key] = { count: 0, connections: [] };
+                connectionCounts[key].count++;
+                connectionCounts[key].connections.push({
+                    source: letter.sender,
+                    target: receiver,
+                    type: letter.type,
+                    number: letter.number,
+                    date: letter.date,
+                    dateObj: new Date(letter.date),
+                    isOCSender: letter.isOCSender || false
+                });
+            });
+        });
+
+        const nodeById = {};
+        nodes.forEach(node => nodeById[node.id] = node);
+
+        const links = [];
+        Object.keys(connectionCounts).forEach(key => {
+            const connInfo = connectionCounts[key];
+            connInfo.connections.forEach((conn, idx) => {
+                const sourceNode = nodeById[conn.source];
+                const targetNode = nodeById[conn.target];
+                if (!sourceNode || !targetNode) return;
+                const totalLinks = connInfo.count;
+                const offset = totalLinks > 1 ? (idx - (totalLinks - 1) / 2) * 3 : 0;
+                links.push({
+                    source: sourceNode,
+                    target: targetNode,
+                    type: conn.type,
+                    number: conn.number,
+                    date: conn.date,
+                    dateObj: conn.dateObj,
+                    isOCSender: conn.isOCSender,
+                    offset: offset,
+                    totalConnections: totalLinks,
+                    visible: true
+                });
+            });
+        });
+
+        // A 类环的元数据（原来是单独 svg circle，现在在 canvas 绘制）
+        const senderRings = {};
+        lettersData.filter(l => l.type === "A" && !l.isOCSender && l.sender).forEach(letter => {
+            const sender = letter.sender;
+            const letterDate = new Date(letter.date);
+            if (!senderRings[sender]) senderRings[sender] = [];
+            senderRings[sender].push({ date: letterDate });
+        });
+
+        // 粒子（仅前 30 条连接如原）
+        const particles = [];
+        links.forEach((link, i) => {
+            if ((link.type === "B" || link.type === "C") && particles.length < 30) {
+                particles.push({
+                    linkIndex: i,
+                    position: Math.random(),
+                    speed: 0.005 + Math.random() * 0.01,
+                    size: link.type === "C" ? 3 : 2,
+                    visible: true
+                });
+            }
+        });
+
+        // pulse rings 数据（为每个节点创建）
+        const pulseRings = nodes.map(n => ({
+            ownerId: n.id,
+            minRadius: n.isOC ? 13 : 10,
+            maxRadius: n.isOC ? 33 : 30,
+            currentRadius: n.isOC ? 13 : 10,
+            growing: true,
+            opacity: 0,
+            speed: 0.5 + Math.random() * 0.5,
+            colorH: n.isOC ? (120 + nodes.indexOf(n) * 20) : (180 + nodes.indexOf(n) * 10)
+        }));
+
+        // d3.forceSimulation 保持原配置（只改变渲染目标）
+        const simulation = d3.forceSimulation()
+            .force("link", d3.forceLink().id(d => d.id).distance(180))
+            .force("charge", d3.forceManyBody().strength(-500))
+            .force("center", d3.forceCenter(centerX(), centerY()).strength(0.01))
+            .force("x", d3.forceX(d => d.x).strength(1.5))
+            .force("y", d3.forceY(d => d.y).strength(0.1))
+            .force("collision", d3.forceCollide().radius(d => d.isOC ? 70 : 50));
+
+        simulation.nodes(nodes).on('tick', onTick);
+        simulation.force('link').links(links);
+
+        // tooltip 引用
+        const tooltip = document.querySelector('.tooltip');
+
+        function showTooltip(x, y, html) {
+            tooltip.innerHTML = html;
+            tooltip.style.left = (x + 15) + 'px';
+            tooltip.style.top = (y - 30) + 'px';
+            tooltip.style.opacity = '1';
+        }
+        function hideTooltip() {
+            tooltip.style.opacity = '0';
+        }
+
+        // ----- 辅助：计算曲线控制点（与原逻辑相同） -----
+        function computeQuadraticControl(sourceX, sourceY, targetX, targetY, total, offset) {
+            const idx = offset ? (offset / 3 + (total - 1) / 2) : 0;
+            const curve = 40 * (idx - (total - 1) / 2);
+            const dx = targetX - sourceX;
+            const dy = targetY - sourceY;
+            const len = Math.hypot(dx, dy) || 1;
+            const cx = (sourceX + targetX) / 2 + curve * (dy) / len;
+            const cy = (sourceY + targetY) / 2 - curve * (dx) / len;
+            return { cx, cy };
+        }
+
+        // ----- 渲染主循环：只在 onTick 中绘制（高效批绘制） -----
+        // 我们不为每个元素创建 DOM，全部在 Canvas 上绘制以降低开销
+        function onTick() {
+            // 清空画布
+            ctx.clearRect(0, 0, width, height);
+
+            // 背景星星（简单实现：少量静态星星）
+            // 为性能，星星仅首次生成并绘制为静态点（如果你需要闪烁可加简单时间变化）
+            if (!canvas._stars) {
+                canvas._stars = [];
+                for (let i = 0; i < 50; i++) {
+                    canvas._stars.push({
+                        x: Math.random() * width,
+                        y: Math.random() * height,
+                        r: Math.random() * 1.5 + 0.5,
+                        alpha: Math.random() * 0.5 + 0.25
+                    });
+                }
+            }
+            ctx.save();
+            for (const s of canvas._stars) {
+                ctx.beginPath();
+                ctx.globalAlpha = s.alpha;
+                ctx.fillStyle = 'rgba(0,200,255,1)';
+                ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.restore();
+
+            // 绘制连接线（links）——先绘制较暗的所有连接，再高亮 hover 的（hover 在交互里处理）
+            ctx.save();
+            ctx.lineCap = 'round';
+            links.forEach(l => {
+                if (!l.visible) return;
+                const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+                const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+                // 颜色决定（尽量与原 svg 颜色匹配）
+                let stroke = 'rgba(150,150,150,0.7)';
+                if (l.isOCSender) {
+                    if (l.type === 'B') stroke = 'rgba(255,100,100,0.7)';
+                    if (l.type === 'C') stroke = 'rgba(255,200,0,0.7)';
+                } else {
+                    if (l.type === 'A') stroke = 'rgba(0,255,255,0.7)';
+                    if (l.type === 'B') stroke = 'rgba(255,100,255,0.7)';
+                    if (l.type === 'C') stroke = 'rgba(255,200,0,0.7)';
+                }
+                ctx.beginPath();
+                ctx.strokeStyle = stroke;
+                ctx.lineWidth = l.isOCSender ? (l.type === 'C' ? 2.5 : 2) : (l.type === 'C' ? 2 : 1);
+                ctx.globalAlpha = 0.2;
+                ctx.moveTo(sx, sy);
+                ctx.quadraticCurveTo(ctrl.cx, ctrl.cy, tx, ty);
+                ctx.stroke();
+            });
+            ctx.restore();
+
+            // 绘制 broadcast-lines（OC B 类散射线）——与原逻辑一致（随机 5 条/信）
+            ctx.save();
+            lettersData.forEach(letter => {
+                if (letter.type === "B" && letter.isOCSender && letter.isBroadcast) {
+                    const senderNode = nodeById[letter.sender];
+                    if (!senderNode || !senderNode.visible) return;
+                    const letterDate = new Date(letter.date);
+                    if (letterDate > currentDate) return;
+                    const lineCount = 5;
+                    for (let i = 0; i < lineCount; i++) {
+                        const angle = (2 * Math.PI / lineCount) * i;
+                        const length = 50 + ((letter._rand && letter._rand[i]) ? letter._rand[i] : (Math.random() * 20));
+                        if (!letter._rand) {
+                            letter._rand = [];
+                            for (let ii = 0; ii < lineCount; ii++) letter._rand.push(Math.random() * 20);
+                        }
+                        const endX = senderNode.x + Math.cos(angle) * length;
+                        const endY = senderNode.y + Math.sin(angle) * length;
+                        ctx.beginPath();
+                        ctx.strokeStyle = 'rgba(255,100,100,0.7)';
+                        ctx.lineWidth = 1.5;
+                        ctx.globalAlpha = 0.6;
+                        ctx.moveTo(senderNode.x, senderNode.y);
+                        ctx.lineTo(endX, endY);
+                        ctx.stroke();
+                    }
+                }
+            });
+            ctx.restore();
+
+            // 绘制 A 类环（senderRings）
+            ctx.save();
+            for (const sender in senderRings) {
+                const arr = senderRings[sender];
+                const owner = nodeById[sender];
+                if (!owner || !owner.visible) continue;
+                arr.forEach((rObj, idx) => {
+                    if (rObj.date > currentDate) return; // 时间过滤
+                    const rad = 20 + idx * 10;
+                    const alpha = Math.max(0, 0.7 - idx * 0.1);
+                    ctx.beginPath();
+                    ctx.strokeStyle = `rgba(0,255,255,${alpha})`;
+                    ctx.lineWidth = 1;
+                    ctx.globalCompositeOperation = 'lighter';
+                    ctx.arc(owner.x, owner.y, rad, 0, Math.PI * 2);
+                    ctx.stroke();
+                });
+            }
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.restore();
+
+            // 更新并绘制脉冲圈（pulseRings）
+            ctx.save();
+            pulseRings.forEach(p => {
+                const ownerNode = nodeById[p.ownerId];
+                if (!ownerNode || !ownerNode.visible) return;
+                if (p.growing) {
+                    p.currentRadius += p.speed;
+                    p.opacity = Math.max(0, 0.2 - (p.currentRadius - p.minRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                    if (p.currentRadius >= p.maxRadius) { p.growing = false; p.currentRadius = p.maxRadius; }
+                } else {
+                    p.currentRadius -= p.speed;
+                    p.opacity = Math.max(0, 0.2 - (p.maxRadius - p.currentRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                    if (p.currentRadius <= p.minRadius) { p.growing = true; p.currentRadius = p.minRadius; }
+                }
+                ctx.beginPath();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = `hsla(${p.colorH},100%,70%,${p.opacity})`;
+                ctx.arc(ownerNode.x, ownerNode.y, p.currentRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+            ctx.restore();
+
+            // 绘制粒子（沿贝塞尔曲线）
+            ctx.save();
+            particles.forEach(pr => {
+                const l = links[pr.linkIndex];
+                if (!l || !l.visible) return;
+                pr.position += pr.speed;
+                if (pr.position > 1) pr.position = 0;
+                const t = pr.position;
+                const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+                const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+                // 二次贝塞尔插值
+                const x = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * ctrl.cx + t * t * tx;
+                const y = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * ctrl.cy + t * t * ty;
+                ctx.beginPath();
+                ctx.fillStyle = l.type === 'B' ? 'rgba(255,100,255,0.9)' : 'rgba(255,200,0,0.9)';
+                ctx.arc(x, y, pr.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.restore();
+
+            // 绘制节点（circles + OC 文本）
+            ctx.save();
+            nodes.forEach((n, i) => {
+                if (!n.visible) return;
+                // glow / shadow
+                ctx.save();
+                ctx.beginPath();
+                ctx.fillStyle = n.isOC ? `hsla(${120 + i * 20},100%,70%,0.8)` : `hsla(${180 + i * 10},100%,70%,0.8)`;
+                ctx.shadowColor = 'rgba(0,255,255,0.6)';
+                ctx.shadowBlur = n.isOC ? 12 : 6;
+                ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                // OC 标记文字
+                if (n.isOC) {
+                    ctx.save();
+                    ctx.fillStyle = 'white';
+                    ctx.font = '8px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('OC', n.x, n.y);
+                    ctx.restore();
+                }
+            });
+            ctx.restore();
+
+            // （注意）鼠标 hover 高亮/tooltip 通过单独事件处理（下面有鼠标事件）
+        } // end onTick
+
+        // ----- 鼠标拾取、拖拽、hover（Canvas 实现） -----
+        let hoveredNode = null;
+        let draggingNode = null;
+        let dragOffset = { x: 0, y: 0 };
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (evt.clientX - rect.left);
+            const y = (evt.clientY - rect.top);
+            return { x, y };
+        }
+
+        // 简单的近邻检测（可用 quadtree 优化，但对 ~1000 nodes 线性扫描通常可接受）
+        function findNodeAt(x, y) {
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                if (!n.visible) continue;
+                const dx = x - n.x;
+                const dy = y - n.y;
+                if (Math.hypot(dx, dy) <= n.r + 4) return n;
+            }
+            return null;
+        }
+
+        canvas.addEventListener('mousemove', (evt) => {
+            const pos = getMousePos(evt);
+            const node = findNodeAt(pos.x, pos.y);
+            if (node !== hoveredNode) {
+                hoveredNode = node;
+                if (!node) {
+                    hideTooltip();
+                } else {
+                    // 显示 tooltip（与原内容一致）
+                    const tooltipText = `${node.name}<br>Email: ${node.email}<br>` + 
+                                        `${node.isOC ? "类型: OC<br>" : ""}` + 
+                                        `注册日期: ${node.registerDate}`;
+                    showTooltip(evt.clientX, evt.clientY, tooltipText);
+
+                    // 高亮相关连接：为简单与高效，这里修改 links 的 globalAlpha 并重新绘制主循环（通过改变 link.visibleAlpha）
+                    // 为性能，我们不重绘所有连接透明度状态——而是在绘制时让默认低 alpha，并在 UI 上通过绘制 highlight arc
+                    // 这里简单实现：在顶层绘制高亮线
+                    // 先触发一次绘制以显示高亮（simulation.tick 已经持续调用 onTick）
+                    // 额外绘制高亮线
+                    highlightNodeConnections(node);
+                }
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            hoveredNode = null;
+            hideTooltip();
+            // 清理高亮（通过下一次 onTick 覆盖）
+        });
+
+        function highlightNodeConnections(node) {
+            // 临时在 canvas 上绘制高亮路径（在正常 onTick 后会被覆盖，所以需要持续显示我们在 tooltip 显示时画）
+            // 简单做法：画一个临时层（另一个 canvas）或直接立即在主 canvas 上画出高亮（此画面会在下一次 onTick 覆盖，但因为 mousemove 会频繁触发，效果仍好）
+            // 这里直接 overlay 高亮并不做持久化
+            // Draw highlight lines
+            ctx.save();
+            ctx.lineWidth = 2;
+            links.forEach(l => {
+                if (!l.visible) return;
+                if (l.source.id === node.id || l.target.id === node.id) {
+                    const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+                    const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(0,255,255,0.85)';
+                    ctx.moveTo(sx, sy);
+                    ctx.quadraticCurveTo(ctrl.cx, ctrl.cy, tx, ty);
+                    ctx.stroke();
+                }
+            });
+            ctx.restore();
+        }
+
+        // 拖拽：mousedown -> 找到节点 -> simulation.alphaTarget(0.3).restart()，mouseup -> fix position
+        canvas.addEventListener('mousedown', (evt) => {
+            const pos = getMousePos(evt);
+            const node = findNodeAt(pos.x, pos.y);
+            if (node) {
+                draggingNode = node;
+                dragOffset.x = pos.x - node.x;
+                dragOffset.y = pos.y - node.y;
+                simulation.alphaTarget(0.3).restart();
+            }
+        });
+        window.addEventListener('mouseup', (evt) => {
+            if (draggingNode) {
+                simulation.alphaTarget(0);
+                draggingNode.fx = draggingNode.x;
+                draggingNode.fy = draggingNode.y;
+            }
+            draggingNode = null;
+        });
+        canvas.addEventListener('mousemove', (evt) => {
+            if (!draggingNode) return;
+            const pos = getMousePos(evt);
+            draggingNode.fx = pos.x - dragOffset.x;
+            draggingNode.fy = pos.y - dragOffset.y;
+        });
+
+        // ----- 时间过滤 & 控件（复用原逻辑） -----
+        const timeSlider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const playButton = document.getElementById('playButton');
+        const resetButton = document.getElementById('resetButton');
+        const speedOptions = document.querySelectorAll('.speed-option');
+
+        function filterByDate(date) {
+            nodes.forEach(node => {
+                node.visible = node.registerDateObj <= date;
+            });
+
+            links.forEach(link => {
+                const sourceVisible = nodeById[link.source.id]?.visible;
+                const targetVisible = nodeById[link.target.id]?.visible;
+                link.visible = sourceVisible && targetVisible && link.dateObj <= date;
+            });
+
+            // A 类环显示逻辑（在绘制时判断）
+            // 更新显示字符串
+            const displayDate = date.toLocaleDateString('en-US', {
+                year: 'numeric', month: 'short', day: 'numeric'
+            });
+            timeDisplay.textContent = displayDate;
+        }
+
+        timeSlider.addEventListener('input', function() {
+            const percentage = this.value / 100;
+            const timeRange = maxDate - minDate;
+            currentDate = new Date(minDate.getTime() + timeRange * percentage);
+            filterByDate(currentDate);
+        });
+
+        function togglePlay() {
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+                playButton.textContent = "▶ Play";
+            } else {
+                if (currentDate >= maxDate) {
+                    currentDate = new Date(minDate);
+                    timeSlider.value = 0;
+                }
+                playButton.textContent = "⏸ Pause";
+                playInterval = setInterval(() => {
+                    currentDate = new Date(currentDate.getTime() + 86400000 * playSpeed);
+                    if (currentDate >= maxDate) {
+                        currentDate = new Date(maxDate);
+                        clearInterval(playInterval);
+                        playInterval = null;
+                        playButton.textContent = "▶ Play";
+                    }
+                    const percentage = (currentDate - minDate) / (maxDate - minDate) * 100;
+                    timeSlider.value = percentage;
+                    filterByDate(currentDate);
+                }, 100);
+            }
+        }
+        function resetVisualization() {
+            if (playInterval) { clearInterval(playInterval); playInterval = null; playButton.textContent = "▶ Play"; }
+            currentDate = new Date(maxDate);
+            timeSlider.value = 100;
+            filterByDate(currentDate);
+        }
+
+        playButton.addEventListener('click', togglePlay);
+        resetButton.addEventListener('click', resetVisualization);
+
+        speedOptions.forEach(option => {
+            option.addEventListener('click', function() {
+                speedOptions.forEach(opt => opt.classList.remove('active'));
+                this.classList.add('active');
+                playSpeed = parseFloat(this.getAttribute('data-speed'));
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    togglePlay();
+                }
+            });
+        });
+
+        // 初始显示
+        filterByDate(maxDate);
+
+        // ----- 自适应窗口 -----
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            // 调整 canvas 分辨率
+            canvas.width = width * DPR;
+            canvas.height = height * DPR;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+            // 重新计算时间尺度（与原逻辑保持一致）
+            const timeScaleNew = d3.scaleTime()
+                .domain(dateExtent)
+                .range([0, width]);
+
+            simulation.force("center", d3.forceCenter(width / 2, height / 2));
+            simulation.force("x", d3.forceX(d => {
+                const registerDate = new Date(d.registerDate);
+                return timeScaleNew(registerDate);
+            }).strength(0.6));
+            simulation.alpha(0.5).restart();
+        });
+
+        // 让 simulation 持续跑并触发绘制（onTick 已绑定）
+        // 但为了确保绘制平滑：我们还做一个 requestAnimationFrame 的绘制 loop 覆盖 onTick 的内容（onTick 只是更新数据）
+        // 这里采用 onTick 即绘制即可（因为 simulation 频率高），已足够
+    } // end initVisualization
+
+    document.addEventListener('DOMContentLoaded', initVisualization);
+    </script>
+</body>
+</html>

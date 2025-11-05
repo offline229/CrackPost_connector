@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrackPost Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Rajdhani', 'Roboto', sans-serif;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #visualization {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px 12px;
+            background: rgba(0, 180, 255, 0.2);
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            border-radius: 4px;
+            pointer-events: none;
+            color: #00f7ff;
+            font-size: 14px;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+            transition: all 0.3s ease;
+            opacity: 0;
+            z-index: 1000;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .node:hover {
+            filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.8));
+        }
+
+        .link {
+            transition: all 0.3s;
+            opacity: 0.2; /* 默认状态下线条更暗 */
+        }
+
+        .link:hover {
+            stroke-width: 2;
+            filter: drop-shadow(0 0 5px rgba(0, 255, 255, 0.8));
+            opacity: 0.7;
+        }
+
+        .type-A {
+            stroke: rgba(0, 255, 255, 0.7);
+        }
+
+        .type-B {
+            stroke: rgba(255, 100, 255, 0.7);
+        }
+
+        .type-C {
+            stroke: rgba(255, 200, 0, 0.7);
+        }
+
+        .broadcast-line {
+            opacity: 0.6;
+            filter: url(#glow);
+        }
+
+        .particle {
+            fill: white;
+            opacity: 0.7;
+        }
+
+        /* 网格背景 */
+        .grid-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 200, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 200, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+        }
+
+        /* 标题样式 */
+        h1 {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(0, 200, 255, 0.8);
+            font-weight: 300;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin: 0;
+            padding: 10px 20px;
+            border-bottom: 1px solid rgba(0, 200, 255, 0.3);
+            background: rgba(0, 20, 40, 0.3);
+            backdrop-filter: blur(5px);
+            border-radius: 4px;
+            z-index: 100;
+        }
+
+        /* 控制面板样式 */
+        .controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 800px;
+            background: rgba(0, 20, 40, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .time-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .slider-container {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .time-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 90%;
+            height: 6px;
+            background: rgba(0, 120, 180, 0.3);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .time-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: rgb(0, 200, 255);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 200, 255, 0.8);
+        }
+
+        .time-display {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-left: 15px;
+            min-width: 100px;
+            text-align: left;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .control-button {
+            background: rgba(0, 100, 150, 0.4);
+            border: 1px solid rgba(0, 200, 255, 0.4);
+            color: rgba(0, 220, 255, 0.9);
+            padding: 8px 15px;
+            margin: 0 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .control-button:hover {
+            background: rgba(0, 150, 200, 0.5);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+        }
+
+        .control-button:active {
+            background: rgba(0, 180, 230, 0.6);
+        }
+
+        /* 进度速度控制 */
+        .speed-control {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .speed-label {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-right: 10px;
+        }
+
+        .speed-options {
+            display: flex;
+        }
+
+        .speed-option {
+            padding: 3px 8px;
+            margin: 0 3px;
+            border-radius: 3px;
+            color: rgba(0, 200, 255, 0.6);
+            cursor: pointer;
+            font-size: 12px;
+            border: 1px solid transparent;
+        }
+
+        .speed-option.active {
+            border-color: rgba(0, 200, 255, 0.6);
+            color: rgba(0, 220, 255, 0.9);
+        }
+
+        .pulse-ring {
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-background"></div>
+    <h1>CrackPost Visualization</h1>
+    <div class="tooltip"></div>
+    <div id="visualization"></div>
+    
+    <div class="controls">
+        <div class="slider-container">
+            <input type="range" min="0" max="100" value="100" class="time-slider" id="timeSlider">
+            <div class="time-display" id="timeDisplay">All Data</div>
+        </div>
+        <div class="button-container">
+            <button class="control-button" id="playButton">▶ Play</button>
+            <button class="control-button" id="resetButton">↺ Reset</button>
+        </div>
+        <div class="speed-control">
+            <div class="speed-label">Speed:</div>
+            <div class="speed-options">
+                <div class="speed-option" data-speed="0.5">0.5x</div>
+                <div class="speed-option active" data-speed="1">1x</div>
+                <div class="speed-option" data-speed="2">2x</div>
+                <div class="speed-option" data-speed="5">5x</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 数据加载函数 - 从TSV文件加载邮件数据和OC注册数据
+        async function loadEmailData() {
+            try {
+                const response = await fetch('./email/global_result.tsv');
+                const data = await response.text();
+                const lines = data.trim().split('\n');
+                
+                // 解析第一行的OC注册数据
+                const ocLine = lines[0];
+                const ocMatch = ocLine.match(/oc_registerdata\s+(.*)/);
+                const ocData = [];
+                
+                if (ocMatch && ocMatch[1]) {
+                    const ocEntries = ocMatch[1].split(',');
+                    ocEntries.forEach(entry => {
+                        if (entry.trim()) {
+                            const [name, date] = entry.split('_');
+                            ocData.push({
+                                name: name.trim(),
+                                registerDate: date ? date.trim() : new Date().toISOString().slice(0, 10)
+                            });
+                        }
+                    });
+                }
+                
+                // 解析邮件数据（从第3行开始，跳过标题行）
+                const emailData = [];
+                for (let i = 2; i < lines.length; i++) {
+                    const cols = lines[i].split('\t');
+                    if (cols.length >= 6) {
+                        emailData.push({
+                            sendType: cols[0].trim(),      // 收/发类型
+                            date: cols[1].trim(),          // 发信日期
+                            sender: cols[2].trim(),        // 发件人
+                            receiver: cols[3].trim(),      // 收件人
+                            letterType: cols[4].trim(),    // 信件类型
+                            path: cols[5].trim()           // 信件保存位置
+                        });
+                    }
+                }
+                
+                console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
+                return { ocData, emailData };
+            } catch (error) {
+                console.error('加载邮件数据失败:', error);
+                return { ocData: [], emailData: [] };
+            }
+        }
+            
+        // 处理邮件数据，构建用户节点和信件连接
+        function processEmailData(ocData, emailData) {
+            // 提取OC名单
+            const ocNames = ocData.map(oc => oc.name);
+            console.log("OC名单:", ocNames);
+            
+            // 跟踪所有用户及其首次出现时间
+            const userFirstSeen = new Map();
+            
+            // 1. 首先遍历所有邮件，找出所有用户的首次出现时间
+            emailData.forEach(email => {
+                // 处理发件人
+                if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
+                    userFirstSeen.set(email.sender, email.date);
+                }
+                
+                // 处理收件人(如果存在)
+                if (email.receiver && !userFirstSeen.has(email.receiver) || 
+                    (email.receiver && new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
+                    userFirstSeen.set(email.receiver, email.date);
+                }
+            });
+            
+            // 2. 构建用户数据 - OC使用注册日期，非OC使用首次出现日期
+            const usersData = [];
+            
+            // 添加OC用户
+            ocData.forEach(oc => {
+                usersData.push({
+                    name: oc.name,
+                    email: `${oc.name}@example.com`, // 假设的邮箱
+                    registerDate: oc.registerDate,
+                    isOC: true
+                });
+            });
+            
+            // 添加非OC用户
+            userFirstSeen.forEach((firstSeenDate, userName) => {
+                // 如果不是OC，添加为普通用户
+                if (!ocNames.includes(userName) && userName) {
+                    usersData.push({
+                        name: userName,
+                        email: `${userName}@example.com`, // 假设的邮箱
+                        registerDate: firstSeenDate,
+                        isOC: false
+                    });
+                }
+            });
+            
+            // 3. 构建信件数据 - 根据OC状态和信件类型分类
+            const lettersData = [];
+            
+            // 用于B类信件连接到最近OC的查找
+            const ocSentHistory = [];
+            emailData.forEach(email => {
+                if (ocNames.includes(email.sender)) {
+                    ocSentHistory.push({
+                        sender: email.sender,
+                        date: email.date
+                    });
+                }
+            });
+            
+            // 对OC发送历史按日期排序（降序 - 最近的在前）
+            ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+            
+            // 处理所有邮件
+            emailData.forEach(email => {
+                // 提取信件类型和编号（A/B/C）
+                const letterTypeMatch = email.letterType.match(/^([ABC])(\d*|[\u4e00-\u9fa5]+)/i);
+                if (!letterTypeMatch) return; // 如果无法提取类型，跳过
+                
+                const letterType = letterTypeMatch[1].toUpperCase(); // A, B, 或 C
+                const letterNumber = letterTypeMatch[0]; // 完整的类型+编号/名称
+                const isOCSender = ocNames.includes(email.sender);
+                
+                // 根据发件人是否OC和信件类型处理
+                if (isOCSender) { // OC发件人
+                    if (letterType === 'A') {
+                        // 不渲染OC发的A类信
+                        return;
+                    } else if (letterType === 'B') {
+                        // OC发B类信 - 产生5条散射线
+                        lettersData.push({
+                            sender: email.sender,
+                            type: letterType,
+                            number: letterNumber,
+                            date: email.date,
+                            receivers: [], // 接收者为空，在渲染时生成散射线
+                            isOCSender: true,
+                            isBroadcast: true // 标记为广播类型
+                        });
+                    } else if (letterType === 'C') {
+                        // OC发C类信 - 从发件人到收件人
+                        if (email.receiver) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: [email.receiver],
+                                isOCSender: true
+                            });
+                        }
+                    }
+                } else { // 非OC发件人
+                    if (letterType === 'A') {
+                        // 非OC发A类信 - 显示为圆圈
+                        lettersData.push({
+                            sender: email.sender,
+                            type: letterType,
+                            number: letterNumber,
+                            date: email.date,
+                            receivers: [], // 保持接收者为空数组，不生成连接
+                            isOCSender: false
+                        });
+                    } else if (letterType === 'B') {
+                        // 非OC发B类信 - 连接到日期前的最新OC
+                        const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
+                        if (relevantOCs.length > 0) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: relevantOCs,
+                                isOCSender: false
+                            });
+                        }
+                    } else if (letterType === 'C') {
+                        // 非OC发C类信 - 从发件人到收件人
+                        if (email.receiver) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: [email.receiver],
+                                isOCSender: false
+                            });
+                        }
+                    }
+                }
+            });
+            
+            console.log("处理后数据:", usersData.length, "个用户,", lettersData.length, "封信件");
+            return { usersData, lettersData };
+        }
+        
+        // 查找邮件日期之前的最近OC发件人
+        function findRelevantOCs(date, ocHistory) {
+            const emailDate = new Date(date);
+            const relevantOCs = [];
+            
+            console.log(`查找B类信件连接 - 信件日期: ${date}`);
+            console.log(`可用OC历史记录数量: ${ocHistory.length}`);
+            
+            // 收集日期早于当前邮件的所有OC（最多5个）
+            for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
+                const ocDate = new Date(ocHistory[i].date);
+                if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
+                    console.log(`找到符合日期的OC: ${ocHistory[i].sender}, OC发信日期: ${ocHistory[i].date}`);
+                    relevantOCs.push(ocHistory[i].sender);
+                }
+            }
+            
+            console.log(`最终选择的OC数量: ${relevantOCs.length}, 列表: ${relevantOCs.join(', ')}`);
+            return relevantOCs;
+        }
+
+        // 主函数 - 替换原有硬编码数据
+        async function initVisualization() {
+            // 先尝试加载实际数据
+            const { ocData, emailData } = await loadEmailData();
+            
+            // 定义默认数据，以防加载失败
+            let usersData = [];
+            let lettersData = [];
+            
+            // 如果有实际数据，使用实际数据；否则使用模拟数据
+            if (ocData.length > 0 || emailData.length > 0) {
+                const processedData = processEmailData(ocData, emailData);
+                usersData = processedData.usersData;
+                lettersData = processedData.lettersData;
+                console.log("使用实际数据");
+            } else {
+                // 使用简单的模拟数据
+                usersData = [
+                    { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
+                    { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
+                    { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
+                    { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
+                    { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
+                ];
+                
+                lettersData = [
+                    { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1", "OC2"], isOCSender: false },
+                    { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
+                    { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
+                    { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
+                    { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
+                ];
+                
+                console.log("使用模拟数据");
+            }
+
+
+            // 时间相关变量
+            const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
+            const minDate = new Date(allDates[0]);
+            const maxDate = new Date(allDates[allDates.length - 1]);
+            let currentDate = new Date(maxDate); // 默认显示所有数据
+            let playInterval = null;
+            let playSpeed = 1; // 默认速度
+
+            // 设置可视化尺寸
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const centerX = width / 2;
+            const centerY = height / 2;
+
+            // 创建时间刻度比例尺，用于根据注册日期布局
+            const leftMargin = width * 0.05;
+            const rightMargin = width * 0.95;
+            const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
+            const timeScale = d3.scaleTime()
+                .domain(dateExtent)
+                .range([leftMargin, rightMargin]);
+
+
+            // 创建SVG - 确保占满整个视窗
+            const svg = d3.select("#visualization")
+                .append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                .attr("viewBox", `0 0 ${width} ${height}`)
+                .attr("preserveAspectRatio", "xMidYMid meet");
+
+            // 添加模糊滤镜效果
+            const defs = svg.append("defs");
+            const filter = defs.append("filter")
+                .attr("id", "glow")
+                .attr("x", "-50%")
+                .attr("y", "-50%")
+                .attr("width", "200%")
+                .attr("height", "200%");
+            
+            filter.append("feGaussianBlur")
+                .attr("stdDeviation", "3")
+                .attr("result", "blur");
+                
+            filter.append("feComposite")
+                .attr("in", "SourceGraphic")
+                .attr("in2", "blur")
+                .attr("operator", "over");
+
+
+            const nodes = usersData.map(user => {
+                const registerDate = new Date(user.registerDate);
+                const x = timeScale(registerDate);
+                const yRandom = Math.random() * (height - 200) + 100;
+                return {
+                    id: user.name,
+                    name: user.name,
+                    email: user.email,
+                    registerDate: user.registerDate,
+                    registerDateObj: registerDate,
+                    x: x,
+                    y: yRandom,
+                    fx: x, // 锁定初始x
+                    fy: yRandom, // 锁定初始y
+                    type: "user",
+                    isOC: user.isOC || false,
+                    visible: true
+                };
+            });
+
+            // 分析通信次数，处理重复连接
+            const connectionCounts = {};
+            lettersData.forEach(letter => {
+                letter.receivers.forEach(receiver => {
+                    const key = letter.sender < receiver 
+                        ? `${letter.sender}|${receiver}` 
+                        : `${receiver}|${letter.sender}`;
+                    
+                    if (!connectionCounts[key]) {
+                        connectionCounts[key] = {
+                            count: 0,
+                            connections: []
+                        };
+                    }
+                    
+                    connectionCounts[key].count++;
+                    connectionCounts[key].connections.push({
+                        source: letter.sender,
+                        target: receiver,
+                        type: letter.type,
+                        number: letter.number,
+                        date: letter.date,
+                        dateObj: new Date(letter.date), // 存储Date对象以便比较
+                        isOCSender: letter.isOCSender || false
+                    });
+                });
+            });
+
+
+            // 创建节点ID到节点对象的映射表
+            const nodeById = {};
+            nodes.forEach(node => {
+                nodeById[node.id] = node;
+            });
+
+            // 创建连接数据，考虑多次通信
+            const links = [];
+            Object.keys(connectionCounts).forEach(key => {
+                const connInfo = connectionCounts[key];
+                
+                connInfo.connections.forEach((conn, idx) => {
+                    // 验证源节点和目标节点都存在
+                    const sourceNode = nodeById[conn.source];
+                    const targetNode = nodeById[conn.target];
+                    
+                    if (!sourceNode || !targetNode) {
+                        console.warn(`跳过无效连接: ${conn.source} -> ${conn.target}`);
+                        return;
+                    }
+                    
+                    // 计算偏移量，使平行线不重叠
+                    const totalLinks = connInfo.count;
+                    const offset = totalLinks > 1 
+                        ? (idx - (totalLinks - 1) / 2) * 3 
+                        : 0;
+                    
+                    links.push({
+                        source: sourceNode, // 使用对象引用而非字符串ID
+                        target: targetNode, // 使用对象引用而非字符串ID
+                        type: conn.type,
+                        number: conn.number,
+                        date: conn.date,
+                        dateObj: conn.dateObj,
+                        isOCSender: conn.isOCSender,
+                        offset: offset,
+                        totalConnections: totalLinks,
+                        visible: true
+                    });
+                });
+            });
+
+            // 创建力导向图布局，使用全屏布局
+            const simulation = d3.forceSimulation()
+                .force("link", d3.forceLink().id(d => d.id).distance(180)) // 增加链接距离
+                .force("charge", d3.forceManyBody().strength(-500)) // 增强排斥力
+                .force("center", d3.forceCenter(centerX, centerY).strength(0.01)) // 极弱中心力
+                .force("x", d3.forceX(d => d.x).strength(1.5)) // 更强的时间轴约束
+                .force("y", d3.forceY(d => d.y).strength(0.1)) // 保持随机Y约束
+                .force("collision", d3.forceCollide().radius(d => d.isOC ? 70 : 50)); // 新增
+
+            // 创建连接线组
+            const linkGroup = svg.append("g");
+
+            // 添加连接线 - 处理多次连接和可见性
+            const link = linkGroup.selectAll(".link")
+                .data(links)
+                .enter()
+                .append("path")
+                .attr("class", d => `link type-${d.type}`)
+                .attr("stroke", d => {
+                    // 根据发件人类型和信件类型设置颜色
+                    if (d.isOCSender) {
+                        // OC发送的信件
+                        if (d.type === "B") return "rgba(255, 100, 100, 0.7)"; // 红色
+                        if (d.type === "C") return "rgba(255, 200, 0, 0.7)"; // 黄色
+                    } else {
+                        // 非OC发送的信件
+                        if (d.type === "A") return "rgba(0, 255, 255, 0.7)"; // 青色
+                        if (d.type === "B") return "rgba(255, 100, 255, 0.7)"; // 粉色
+                        if (d.type === "C") return "rgba(255, 200, 0, 0.7)"; // 黄色
+                    }
+                    return "rgba(150, 150, 150, 0.7)"; // 默认灰色
+                })
+                .attr("stroke-width", d => {
+                    if (d.isOCSender) return d.type === "C" ? 2.5 : 2;
+                    return d.type === "C" ? 2 : 1;
+                })
+                .style("filter", "url(#glow)")
+                .style("opacity", 0.2) // 默认更暗的连接线
+                .style("display", "block") // 初始全部可见
+                .on("mouseover", function(event, d) {
+                    d3.select(this)
+                      .attr("stroke-width", d.type === "C" ? 3 : 2)
+                      .style("opacity", 0.8);
+                      
+                    showTooltip(event, `${d.source.id} → ${d.target.id}<br>Type: ${d.type}<br>Number: ${d.number}<br>Date: ${d.date}`);
+                })
+                .on("mouseout", function() {
+                    d3.select(this)
+                      .attr("stroke-width", d => d.type === "C" ? 2 : 1)
+                      .style("opacity", 0.2); // 恢复为暗色
+                      
+                    hideTooltip();
+                });
+
+            // 为B和C类信件添加箭头标记
+            svg.append("defs").selectAll("marker")
+                .data(["B", "C"])
+                .enter().append("marker")
+                .attr("id", d => `arrow-${d}`)
+                .attr("viewBox", "0 -5 10 10")
+                .attr("refX", 25)
+                .attr("refY", 0)
+                .attr("markerWidth", 6)
+                .attr("markerHeight", 6)
+                .attr("orient", "auto")
+                .append("path")
+                .attr("fill", d => d === "B" ? "rgba(255, 100, 255, 0.9)" : "rgba(255, 200, 0, 0.9)")
+                .attr("d", "M0,-5L10,0L0,5");
+
+            // 更新连接线添加箭头
+            link.filter(d => d.type === "B" || d.type === "C")
+                .attr("marker-end", d => `url(#arrow-${d.type})`);
+
+            // 创建节点组
+            const nodeGroup = svg.append("g");
+
+            // 添加节点
+            const node = nodeGroup.selectAll(".node")
+                .data(nodes)
+                .enter()
+                .append("g")
+                .attr("class", "node")
+                .style("display", "block") // 初始全部可见
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            // 添加圆形节点 - 区分OC与普通用户
+            node.append("circle")
+                .attr("r", d => d.isOC ? 13 : 8) // OC节点更大
+                .attr("fill", (d, i) => {
+                    if (d.isOC) {
+                        return `hsla(${120 + i * 20}, 100%, 70%, 0.8)`; // OC使用绿色系
+                    }
+                    return `hsla(${180 + i * 10}, 100%, 70%, 0.8)`; // 非OC使用蓝色系
+                })
+                .style("filter", "url(#glow)")
+                .style("stroke", d => d.isOC ? "rgba(255,255,255,0.8)" : "none") // OC边框
+                .style("stroke-width", 1.5)
+                .on("mouseover", function(event, d) {
+                    d3.select(this)
+                      .attr("r", d.isOC ? 18 : 13)
+                      .style("opacity", 1);
+                      
+                    // 修改提示内容，显示OC状态
+                    const tooltipText = `${d.name}<br>Email: ${d.email}<br>` + 
+                                       `${d.isOC ? "类型: OC<br>" : ""}` + 
+                                       `注册日期: ${d.registerDate}`;
+                    showTooltip(event, tooltipText);
+                    
+                    // 高亮相关连接，其他连接变暗
+                    link.style("opacity", l => {
+                        if (l.source.id === d.id || l.target.id === d.id) return 0.8;
+                        return 0.05;
+                    });
+                })
+                .on("mouseout", function() {
+                    d3.select(this)
+                      .attr("r", d => d.isOC ? 13 : 8)
+                      .style("opacity", 0.8);
+                      
+                    hideTooltip();
+                    
+                    // 恢复连接透明度
+                    link.style("opacity", 0.2);
+                });
+            
+            // 为OC节点添加特殊标记
+            node.filter(d => d.isOC)
+                .append("text")
+                .attr("text-anchor", "middle")
+                .attr("dy", ".3em")
+                .text("OC")
+                .attr("font-size", "8px")
+                .attr("fill", "white");
+
+            // 创建A类信件环形的映射，跟踪每个发送者的环形
+            const senderRings = {};
+
+            // 添加A类信件环形（修复环形跟随问题）
+            lettersData.filter(l => l.type === "A" && !l.isOCSender && l.sender).forEach((letter, letterIndex) => {
+                const sender = letter.sender;
+                const letterDate = new Date(letter.date);
+                const senderNode = nodeById[sender];
+                
+                // 如果发件人节点不存在，跳过
+                if (!senderNode) {
+                    console.warn(`无法为未知发件人创建环形: ${sender}`);
+                    return;
+                }
+                
+                // 为每个发送者创建环形数组
+                if (!senderRings[sender]) {
+                    senderRings[sender] = [];
+                }
+                
+                // 创建新环并存储在映射中
+                const ring = svg.append("circle")
+                    .attr("class", "type-A-ring")
+                    .attr("r", 20 + senderRings[sender].length * 10) // 逐渐变大的环
+                    .attr("fill", "none")
+                    .attr("stroke", `rgba(0, 255, 255, ${0.7 - senderRings[sender].length * 0.1})`)
+                    .attr("stroke-width", 1)
+                    .style("filter", "url(#glow)")
+                    .style("pointer-events", "none")
+                    .style("display", "block") // 初始全部可见
+                    .attr("data-sender", sender) // 使用data-sender属性存储发送者
+                    .attr("data-date", letter.date); // 存储日期用于时间过滤
+                    
+                senderRings[sender].push({ring: ring, date: letterDate});
+            });
+
+            // 添加动画粒子
+            // 只为前30条连接生成粒子
+            const particles = [];
+            links.forEach((link, i) => {
+                if ((link.type === "B" || link.type === "C") && i < 30) {
+                    particles.push({
+                        link: i,
+                        position: 0,
+                        speed: 0.005 + Math.random() * 0.01,
+                        size: link.type === "C" ? 3 : 2,
+                        visible: true
+                    });
+                }
+            });
+
+            const particleElements = svg.append("g")
+                .selectAll(".particle")
+                .data(particles)
+                .enter().append("circle")
+                .attr("class", "particle")
+                .attr("r", d => d.size)
+                .style("filter", "url(#glow)")
+                .style("display", "block") // 初始全部可见
+                .attr("fill", d => {
+                    const linkType = links[d.link].type;
+                    return linkType === "B" ? "rgba(255, 100, 255, 0.9)" : "rgba(255, 200, 0, 0.9)";
+                });
+
+            // 改进脉冲动画实现 - 使用requestAnimationFrame而非transition
+            const pulseRings = [];
+            
+            node.each(function(d) {
+                const color = d.isOC 
+                    ? `hsla(${120 + nodes.indexOf(d) * 20}, 100%, 70%, 0.8)` 
+                    : `hsla(${180 + nodes.indexOf(d) * 10}, 100%, 70%, 0.8)`;
+                
+                const pulse = svg.append("circle")
+                    .attr("class", "pulse-ring")
+                    .attr("data-owner", d.id) // 添加数据属性以便更新
+                    .attr("r", d.isOC ? 13 : 10)
+                    .attr("fill", "none")
+                    .attr("stroke", color)
+                    .attr("stroke-width", 2)
+                    .style("opacity", 0)
+                    .style("display", "block");
+
+                // 创建自定义脉冲动画对象
+                const pulseAnimation = {
+                    element: pulse,
+                    owner: d.id,
+                    minRadius: d.isOC ? 13 : 10,
+                    maxRadius: d.isOC ? 33 : 30,
+                    currentRadius: d.isOC ? 13 : 10,
+                    growing: true,
+                    opacity: 0,
+                    speed: 0.5 + Math.random() * 0.5,
+                    color: color,
+                    visible: true
+                };
+                
+                pulseRings.push(pulseAnimation);
+            });
+
+            // 使用requestAnimationFrame实现更可靠的脉冲动画
+            function animatePulses() {
+                pulseRings.forEach(p => {
+                    if (!p.visible) return;
+                    
+                    if (p.growing) {
+                        p.currentRadius += p.speed;
+                        p.opacity = Math.max(0, 0.2 - (p.currentRadius - p.minRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                        
+                        if (p.currentRadius >= p.maxRadius) {
+                            p.growing = false;
+                            p.currentRadius = p.maxRadius;
+                        }
+                    } else {
+                        p.currentRadius -= p.speed;
+                        p.opacity = Math.max(0, 0.2 - (p.maxRadius - p.currentRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                        
+                        if (p.currentRadius <= p.minRadius) {
+                            p.growing = true;
+                            p.currentRadius = p.minRadius;
+                        }
+                    }
+                    
+                    p.element
+                        .attr("r", p.currentRadius)
+                        .style("opacity", p.opacity);
+                });
+                
+                requestAnimationFrame(animatePulses);
+            }
+
+            // 启动脉冲动画
+            animatePulses();
+
+            // 设置tooltip显示和隐藏函数
+            const tooltip = d3.select(".tooltip");
+
+            function showTooltip(event, text) {
+                tooltip.html(text)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 30) + "px")
+                    .transition()
+                    .duration(200)
+                    .style("opacity", 1);
+            }
+
+            function hideTooltip() {
+                tooltip.transition()
+                    .duration(200)
+                    .style("opacity", 0);
+            }
+
+            // 更新力导向图
+            simulation
+                .nodes(nodes)
+                .on("tick", ticked);
+
+            simulation.force("link")
+                .links(links);
+
+            function ticked() {
+                // 计算连接线偏移，处理多次通信连线
+                link.each(function(d) {
+                    const sourceX = d.source.x;
+                    const sourceY = d.source.y;
+                    const targetX = d.target.x;
+                    const targetY = d.target.y;
+                    const total = d.totalConnections || 1;
+                    const idx = d.offset ? (d.offset / 3 + (total - 1) / 2) : 0;
+                    const curve = 40 * (idx - (total - 1) / 2);
+                    const cx = (sourceX + targetX) / 2 + curve * (targetY - sourceY) / Math.hypot(targetX - sourceX, targetY - sourceY);
+                    const cy = (sourceY + targetY) / 2 - curve * (targetX - sourceX) / Math.hypot(targetX - sourceX, targetY - sourceY);
+                    d3.select(this)
+                        .attr("d", `M${sourceX},${sourceY} Q${cx},${cy} ${targetX},${targetY}`);
+                });
+
+                // 更新节点位置
+                node
+                    .attr("transform", d => `translate(${d.x}, ${d.y})`);
+
+                // 更新A类信件环形位置
+                svg.selectAll(".type-A-ring")
+                    .each(function() {
+                        const sender = this.getAttribute("data-sender");
+                        if (sender) {
+                            const senderNode = nodes.find(n => n.id === sender);
+                            if (senderNode) {
+                                d3.select(this)
+                                    .attr("cx", senderNode.x)
+                                    .attr("cy", senderNode.y);
+                            }
+                        }
+                    });
+
+                // 更新脉冲环形位置
+                pulseRings.forEach(p => {
+                    const ownerNode = nodes.find(n => n.id === p.owner);
+                    if (ownerNode) {
+                        p.element
+                            .attr("cx", ownerNode.x)
+                            .attr("cy", ownerNode.y)
+                            .style("display", ownerNode.visible ? "block" : "none");
+                        
+                        p.visible = ownerNode.visible;
+                    }
+                });
+
+                particleElements.each(function(d) {
+                    const l = links[d.link];
+                    if (!l.visible) {
+                        d3.select(this).style("display", "none");
+                        d.visible = false;
+                        return;
+                    }
+                    d.visible = true;
+                    d3.select(this).style("display", "block");
+
+                    // 贝塞尔曲线参数
+                    const sourceX = l.source.x;
+                    const sourceY = l.source.y;
+                    const targetX = l.target.x;
+                    const targetY = l.target.y;
+                    const total = l.totalConnections || 1;
+                    const idx = l.offset ? (l.offset / 3 + (total - 1) / 2) : 0;
+                    const curve = 40 * (idx - (total - 1) / 2);
+                    const cx = (sourceX + targetX) / 2 + curve * (targetY - sourceY) / Math.hypot(targetX - sourceX, targetY - sourceY);
+                    const cy = (sourceY + targetY) / 2 - curve * (targetX - sourceX) / Math.hypot(targetX - sourceX, targetY - sourceY);
+
+                    // 贝塞尔插值
+                    d.position += d.speed;
+                    if (d.position > 1) d.position = 0;
+                    const t = d.position;
+                    // 二次贝塞尔公式
+                    const x = (1 - t) * (1 - t) * sourceX + 2 * (1 - t) * t * cx + t * t * targetX;
+                    const y = (1 - t) * (1 - t) * sourceY + 2 * (1 - t) * t * cy + t * t * targetY;
+
+                    d3.select(this)
+                        .attr("cx", x)
+                        .attr("cy", y);
+                });
+                                
+                // 处理OC发送的B类散射线
+                svg.selectAll(".broadcast-line").remove(); // 清除旧的散射线
+                
+                // 为所有OC发送的B类信件创建散射线
+                lettersData.forEach(letter => {
+                    if (letter.type === "B" && letter.isOCSender && letter.isBroadcast) {
+                        const senderNode = nodes.find(n => n.id === letter.sender);
+                        if (!senderNode || !senderNode.visible) return;
+                        
+                        const letterDate = new Date(letter.date);
+                        if (letterDate > currentDate) return; // 时间过滤
+                        
+                        // 创建5条散射线
+                        const lineCount = 5;
+                        for (let i = 0; i < lineCount; i++) {
+                            // 散射角度和长度
+                            const angle = (2 * Math.PI / lineCount) * i;
+                            const length = 50 + Math.random() * 20;
+                            
+                            // 终点坐标
+                            const endX = senderNode.x + Math.cos(angle) * length;
+                            const endY = senderNode.y + Math.sin(angle) * length;
+                            
+                            // 添加散射线
+                            svg.append("line")
+                                .attr("class", "broadcast-line")
+                                .attr("x1", senderNode.x)
+                                .attr("y1", senderNode.y)
+                                .attr("x2", endX)
+                                .attr("y2", endY)
+                                .attr("stroke", "rgba(255, 100, 100, 0.7)")
+                                .attr("stroke-width", 1.5)
+                                .style("opacity", 0.6)
+                                .style("filter", "url(#glow)");
+                        }
+                    }
+                });
+            }
+
+            // 拖拽函数
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                // 拖拽结束后，锁定在当前位置
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            // 自适应窗口大小
+            window.addEventListener("resize", () => {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+                
+                svg.attr("viewBox", `0 0 ${width} ${height}`);
+                    
+                simulation.force("center", d3.forceCenter(width / 2, height / 2))
+                        .force("x", d3.forceX(d => {
+                            // 重新计算时间轴，移除所有边距
+                            const timeScale = d3.scaleTime()
+                                .domain(dateExtent)
+                                .range([0, width]);
+                            const registerDate = new Date(d.registerDate);
+                            return timeScale(registerDate);
+                        }).strength(0.6))
+                        .alpha(0.5) // 增加重启强度
+                        .restart();
+            });
+
+            // 添加背景动画星星
+            const starsGroup = svg.append("g").attr("class", "stars");
+            
+            for (let i = 0; i < 50; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const size = Math.random() * 1.5 + 0.5;
+                const opacity = Math.random() * 0.5 + 0.25;
+                
+                const star = starsGroup.append("circle")
+                    .attr("cx", x)
+                    .attr("cy", y)
+                    .attr("r", size)
+                    .attr("fill", `rgba(0, 200, 255, ${opacity})`)
+                    .style("filter", "url(#glow)");
+                    
+                // 添加闪烁效果
+                function blink() {
+                    star.transition()
+                        .duration(1000 + Math.random() * 3000)
+                        .attr("r", size * (0.5 + Math.random()))
+                        .style("opacity", 0.1 + Math.random() * 0.9)
+                        .transition()
+                        .duration(1000 + Math.random() * 3000)
+                        .attr("r", size)
+                        .style("opacity", opacity)
+                        .on("end", blink);
+                }
+                
+                setTimeout(blink, Math.random() * 3000);
+            }
+
+            // 时间控制功能
+            const timeSlider = document.getElementById('timeSlider');
+            const timeDisplay = document.getElementById('timeDisplay');
+            const playButton = document.getElementById('playButton');
+            const resetButton = document.getElementById('resetButton');
+            const speedOptions = document.querySelectorAll('.speed-option');
+
+            // 时间过滤函数
+            function filterByDate(date) {
+                // 更新节点可见性
+                nodes.forEach(node => {
+                    node.visible = node.registerDateObj <= date;
+                    const nodeElement = d3.select(`.node:has(circle[data-id="${node.id}"])`);
+                    if (nodeElement.size()) {
+                        nodeElement.style("display", node.visible ? "block" : "none");
+                    }
+                });
+                
+                // 更新节点DOM元素可见性
+                node.style("display", d => d.visible ? "block" : "none");
+                
+                // 更新连接线可见性
+                links.forEach(link => {
+                    const sourceVisible = nodes.find(n => n.id === link.source.id)?.visible;
+                    const targetVisible = nodes.find(n => n.id === link.target.id)?.visible;
+                    link.visible = sourceVisible && targetVisible && link.dateObj <= date;
+                });
+                
+                // 更新连接线DOM元素可见性
+                link.style("display", d => d.visible ? "block" : "none");
+                
+                // 更新A类信件环形可见性
+                svg.selectAll(".type-A-ring").each(function() {
+                    const ringDate = new Date(this.getAttribute("data-date"));
+                    const isVisible = ringDate <= date;
+                    d3.select(this).style("display", isVisible ? "block" : "none");
+                });
+                
+                // 格式化日期显示
+                const displayDate = date.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+                
+                timeDisplay.textContent = displayDate;
+            }
+
+            // 初始化时间滑块
+            timeSlider.addEventListener('input', function() {
+                const percentage = this.value / 100;
+                const timeRange = maxDate - minDate;
+                currentDate = new Date(minDate.getTime() + timeRange * percentage);
+                filterByDate(currentDate);
+            });
+
+            // 播放功能
+            function togglePlay() {
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    playInterval = null;
+                    playButton.textContent = "▶ Play";
+                } else {
+                    // 如果已经到最大日期，重置到最小日期
+                    if (currentDate >= maxDate) {
+                        currentDate = new Date(minDate);
+                        timeSlider.value = 0;
+                    }
+                    
+                    playButton.textContent = "⏸ Pause";
+                    
+                    playInterval = setInterval(() => {
+                        // 增加当前日期
+                        currentDate = new Date(currentDate.getTime() + 86400000 * playSpeed); // 每帧前进一天×速度
+                        
+                        // 如果超过最大日期，停止播放
+                        if (currentDate >= maxDate) {
+                            currentDate = new Date(maxDate);
+                            clearInterval(playInterval);
+                            playInterval = null;
+                            playButton.textContent = "▶ Play";
+                        }
+                        
+                        // 更新滑块位置
+                        const percentage = (currentDate - minDate) / (maxDate - minDate) * 100;
+                        timeSlider.value = percentage;
+                        
+                        // 应用过滤
+                        filterByDate(currentDate);
+                    }, 100); // 每100毫秒更新一次
+                }
+            }
+
+            // 重置功能
+            function resetVisualization() {
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    playInterval = null;
+                    playButton.textContent = "▶ Play";
+                }
+                
+                currentDate = new Date(maxDate);
+                timeSlider.value = 100;
+                filterByDate(currentDate);
+            }
+
+            // 初始化事件监听器
+            playButton.addEventListener('click', togglePlay);
+            resetButton.addEventListener('click', resetVisualization);
+
+            // 速度控制
+            speedOptions.forEach(option => {
+                option.addEventListener('click', function() {
+                    speedOptions.forEach(opt => opt.classList.remove('active'));
+                    this.classList.add('active');
+                    playSpeed = parseFloat(this.getAttribute('data-speed'));
+                    
+                    // 如果正在播放，重启播放以应用新速度
+                    if (playInterval) {
+                        clearInterval(playInterval);
+                        togglePlay();
+                    }
+                });
+            });
+
+            // 初始化显示所有数据
+            filterByDate(maxDate);
+        }
+
+        // 页面加载完成后启动可视化
+        document.addEventListener('DOMContentLoaded', initVisualization);
+    </script>
+</body>
+</html>

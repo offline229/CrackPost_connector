@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>CrackPost Visualization — Canvas High-Perf</title>
+
+    <!-- 如果你需要完全本地化，请下载 d3.v7.min.js 到本目录并将下面这行替换成本地引用（例如 ./libs/d3.v7.min.js） -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Rajdhani', 'Roboto', sans-serif;
+            width: 100vw;
+            height: 100vh;
+        }
+        #visualization {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        /* Canvas 覆盖在该容器内 */
+        canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px 12px;
+            background: rgba(0, 180, 255, 0.2);
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            border-radius: 4px;
+            pointer-events: none;
+            color: #00f7ff;
+            font-size: 14px;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+            transition: all 0.12s ease;
+            opacity: 0;
+            z-index: 1000;
+        }
+
+        /* 复用你原来的样式（控件/标题/面板）——未变 */
+        .grid-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 200, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 200, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+        }
+        h1 {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(0, 200, 255, 0.8);
+            font-weight: 300;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin: 0;
+            padding: 10px 20px;
+            border-bottom: 1px solid rgba(0, 200, 255, 0.3);
+            background: rgba(0, 20, 40, 0.3);
+            backdrop-filter: blur(5px);
+            border-radius: 4px;
+            z-index: 100;
+        }
+        .controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 800px;
+            background: rgba(0, 20, 40, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 100;
+        }
+        /* 剩余控件样式复用（和原文件一样） */
+        .time-slider { width: 100%; margin: 10px 0; }
+        .slider-container { width: 100%; display:flex; align-items:center; margin-top:5px; }
+        .time-slider { -webkit-appearance:none; appearance:none; width:90%; height:6px; background: rgba(0,120,180,0.3); border-radius:3px; outline:none;}
+        .time-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; background: rgb(0,200,255); border-radius:50%; cursor:pointer; box-shadow:0 0 10px rgba(0,200,255,0.8); }
+        .time-display { color: rgba(0,200,255,0.8); font-size:14px; margin-left:15px; min-width:100px; text-align:left;}
+        .button-container{ display:flex; justify-content:center; margin-top:10px; }
+        .control-button{ background: rgba(0,100,150,0.4); border:1px solid rgba(0,200,255,0.4); color: rgba(0,220,255,0.9); padding:8px 15px; margin:0 5px; border-radius:5px; cursor:pointer; transition:all 0.2s ease; font-family:inherit; outline:none;}
+        .control-button:hover{ background: rgba(0,150,200,0.5); box-shadow: 0 0 15px rgba(0,200,255,0.5);}
+        .control-button:active{ background: rgba(0,180,230,0.6);}
+        .speed-control{ display:flex; align-items:center; margin-top:5px; }
+        .speed-label{ color: rgba(0,200,255,0.8); font-size:14px; margin-right:10px; }
+        .speed-options{ display:flex; }
+        .speed-option{ padding:3px 8px; margin:0 3px; border-radius:3px; color: rgba(0,200,255,0.6); cursor:pointer; font-size:12px; border:1px solid transparent; }
+        .speed-option.active{ border-color: rgba(0,200,255,0.6); color: rgba(0,220,255,0.9); }
+
+    </style>
+</head>
+<body>
+    <div class="grid-background"></div>
+    <h1>CrackPost Visualization</h1>
+    <div class="tooltip"></div>
+    <div id="visualization"></div>
+
+    <div class="controls">
+        <div class="slider-container">
+            <input type="range" min="0" max="100" value="100" class="time-slider" id="timeSlider">
+            <div class="time-display" id="timeDisplay">All Data</div>
+        </div>
+        <div class="button-container">
+            <button class="control-button" id="playButton">▶ Play</button>
+            <button class="control-button" id="resetButton">↺ Reset</button>
+        </div>
+        <div class="speed-control">
+            <div class="speed-label">Speed:</div>
+            <div class="speed-options">
+                <div class="speed-option" data-speed="0.5">0.5x</div>
+                <div class="speed-option active" data-speed="1">1x</div>
+                <div class="speed-option" data-speed="2">2x</div>
+                <div class="speed-option" data-speed="5">5x</div>
+            </div>
+        </div>
+    </div>
+
+<script>
+
+async function loadEmailData() {
+    try {
+        const response = await fetch('./email/global_result.tsv');
+        const data = await response.text();
+        const lines = data.trim().split('\n');
+
+        const ocLine = lines[0] || '';
+        const ocMatch = ocLine.match(/oc_registerdata\s+(.*)/);
+        const ocData = [];
+
+        if (ocMatch && ocMatch[1]) {
+            const ocEntries = ocMatch[1].split(',');
+            ocEntries.forEach(entry => {
+                if (entry.trim()) {
+                    const [name, date] = entry.split('_');
+                    ocData.push({
+                        name: name.trim(),
+                        registerDate: date ? date.trim() : new Date().toISOString().slice(0, 10)
+                    });
+                }
+            });
+        }
+
+        const emailData = [];
+        for (let i = 2; i < lines.length; i++) {
+            const cols = lines[i].split('\t');
+            if (cols.length >= 6) {
+                emailData.push({
+                    sendType: cols[0].trim(),
+                    date: cols[1].trim(),
+                    sender: cols[2].trim(),
+                    receiver: cols[3].trim(),
+                    letterType: cols[4].trim(),
+                    path: cols[5].trim()
+                });
+            }
+        }
+
+        console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
+        return { ocData, emailData };
+    } catch (error) {
+        console.error('加载邮件数据失败:', error);
+        return { ocData: [], emailData: [] };
+    }
+}
+
+function processEmailData(ocData, emailData) {
+    const ocNames = ocData.map(oc => oc.name);
+    const userFirstSeen = new Map();
+
+    emailData.forEach(email => {
+        if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
+            userFirstSeen.set(email.sender, email.date);
+        }
+        if (email.receiver && (!userFirstSeen.has(email.receiver) || new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
+            userFirstSeen.set(email.receiver, email.date);
+        }
+    });
+
+    const usersData = [];
+    ocData.forEach(oc => {
+        usersData.push({
+            name: oc.name,
+            email: `${oc.name}@example.com`,
+            registerDate: oc.registerDate,
+            isOC: true
+        });
+    });
+
+    userFirstSeen.forEach((firstSeenDate, userName) => {
+        if (!ocNames.includes(userName) && userName) {
+            usersData.push({
+                name: userName,
+                email: `${userName}@example.com`,
+                registerDate: firstSeenDate,
+                isOC: false
+            });
+        }
+    });
+
+    const lettersData = [];
+    const ocSentHistory = [];
+    emailData.forEach(email => {
+        if (ocNames.includes(email.sender)) {
+            ocSentHistory.push({
+                sender: email.sender,
+                date: email.date
+            });
+        }
+    });
+    ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    function findRelevantOCs(date, ocHistory) {
+        const emailDate = new Date(date);
+        const relevantOCs = [];
+        for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
+            const ocDate = new Date(ocHistory[i].date);
+            if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
+                relevantOCs.push(ocHistory[i].sender);
+            }
+        }
+        return relevantOCs;
+    }
+
+    emailData.forEach(email => {
+        const letterTypeMatch = (email.letterType || '').match(/^([ABC])(\d*|[\u4e00-\u9fa5]+)/i);
+        if (!letterTypeMatch) return;
+        const letterType = letterTypeMatch[1].toUpperCase();
+        const letterNumber = letterTypeMatch[0];
+        const isOCSender = ocNames.includes(email.sender);
+
+        if (isOCSender) {
+            if (letterType === 'A') return;
+            else if (letterType === 'B') {
+                lettersData.push({
+                    sender: email.sender,
+                    type: letterType,
+                    number: letterNumber,
+                    date: email.date,
+                    receivers: [],
+                    isOCSender: true,
+                    isBroadcast: true
+                });
+            } else if (letterType === 'C') {
+                if (email.receiver) {
+                    lettersData.push({
+                        sender: email.sender,
+                        type: letterType,
+                        number: letterNumber,
+                        date: email.date,
+                        receivers: [email.receiver],
+                        isOCSender: true
+                    });
+                }
+            }
+        } else {
+            if (letterType === 'A') {
+                lettersData.push({
+                    sender: email.sender,
+                    type: letterType,
+                    number: letterNumber,
+                    date: email.date,
+                    receivers: [],
+                    isOCSender: false
+                });
+            } else if (letterType === 'B') {
+                const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
+                if (relevantOCs.length > 0) {
+                    lettersData.push({
+                        sender: email.sender,
+                        type: letterType,
+                        number: letterNumber,
+                        date: email.date,
+                        receivers: relevantOCs,
+                        isOCSender: false
+                    });
+                }
+            } else if (letterType === 'C') {
+                if (email.receiver) {
+                    lettersData.push({
+                        sender: email.sender,
+                        type: letterType,
+                        number: letterNumber,
+                        date: email.date,
+                        receivers: [email.receiver],
+                        isOCSender: false
+                    });
+                }
+            }
+        }
+    });
+
+    return { usersData, lettersData };
+}
+
+async function initVisualization() {
+    // hover state variables (declare early to avoid ReferenceError)
+    let hoveredLink = null;
+    let hoveredNode = null;
+    let hoveredRing = null;
+
+    // load and process
+    const { ocData, emailData } = await loadEmailData();
+    let usersData = [], lettersData = [];
+    if ((ocData && ocData.length) || (emailData && emailData.length)) {
+        const processed = processEmailData(ocData, emailData);
+        usersData = processed.usersData;
+        lettersData = processed.lettersData;
+    } else {
+        // fallback mock (keeps same structure)
+        usersData = [
+            { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
+            { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
+            { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
+            { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
+            { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
+        ];
+        lettersData = [
+            { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1","OC2"], isOCSender: false },
+            { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
+            { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
+            { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
+            { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
+        ];
+    }
+
+    // compute date range
+    const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
+    const minDate = new Date(allDates[0]);
+    const maxDate = new Date(allDates[allDates.length - 1]);
+    let currentDate = new Date(minDate); // start from min
+    let playInterval = null;
+    let playSpeed = 1;
+
+    // canvas setup
+    const container = document.getElementById('visualization');
+    container.style.position = 'relative';
+    const canvas = document.createElement('canvas');
+    canvas.style.position = 'absolute';
+    canvas.style.left = '0';
+    canvas.style.top = '0';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    const DPR = devicePixelRatio || 1;
+    container.appendChild(canvas);
+    const ctx = canvas.getContext('2d', { alpha: true });
+
+    // tooltip DOM
+    const tooltip = document.querySelector('.tooltip');
+    if (tooltip) {
+        tooltip.style.position = 'absolute';
+        tooltip.style.pointerEvents = 'none';
+        tooltip.style.display = 'none';
+        tooltip.style.background = 'rgba(20,20,20,0.9)';
+        tooltip.style.color = '#fff';
+        tooltip.style.padding = '8px 10px';
+        tooltip.style.borderRadius = '6px';
+        tooltip.style.fontSize = '13px';
+        tooltip.style.lineHeight = '1.4';
+    }
+
+    // dimensions and time scale (will be recalculated on resize)
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    function resizeCanvas() {
+        width = Math.max(100, container.clientWidth || window.innerWidth);
+        height = Math.max(100, container.clientHeight || window.innerHeight);
+        canvas.width = Math.max(1, Math.floor(width * DPR));
+        canvas.height = Math.max(1, Math.floor(height * DPR));
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+    }
+    resizeCanvas();
+
+// ...existing code...
+
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        // 保持 timeScale 的像素范围与容器一致（左右 10% margin）
+        if (typeof timeScale !== 'undefined' && timeScale.range) {
+            timeScale.range([width * 0.1, width * 0.9]);
+        }
+        // 重新基于新窗口尺寸计算一次初始布局并固定位置
+        computeInitialLayout(300);
+        // 注意：不要在 resize 后频繁调用 computeFit()，computeInitialLayout 内已调用一次
+    });
+
+// ...existing code...
+
+    // timeScale for X layout (map register dates to X)
+    const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
+    const timeScale = d3.scaleTime()
+        .domain(dateExtent)
+        .range([width * 0.1, width * 0.9]);
+
+    // deterministic hash -> used to place nodes vertically in a narrow band
+    function nameHashToNormalized(name) {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < name.length; i++) {
+            h ^= name.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        return (h % 1000) / 1000; // 0..1
+    }
+
+    // build nodes - compute x from time, compute y deterministically but constrained to a narrow vertical band
+    const nodes = usersData.map((user, i) => {
+        const registerDate = new Date(user.registerDate);
+        const x = timeScale(registerDate);
+        // compress vertical distribution into center band: +/- 9% of height by default
+        const band = Math.max(40, height * 0.18); // ensure at least some pixels
+        const normalized = nameHashToNormalized(user.name);
+        const yCenter = height * 0.5;
+        const y = yCenter + (normalized - 0.5) * band;
+        return {
+            id: user.name,
+            name: user.name,
+            email: user.email,
+            registerDate: user.registerDate,
+            registerDateObj: registerDate,
+            x: x,
+            y: y,
+            fx: null,
+            fy: null,
+            type: "user",
+            isOC: !!user.isOC,
+            visible: false,
+            r: user.isOC ? 13 : 8,
+            // counters (will be filled by filterByDate)
+            sentCount: 0,
+            recvCount: 0
+        };
+    });
+    const nodeById = {};
+    nodes.forEach(n => nodeById[n.id] = n);
+
+    // build links same as before (links are purely visual now; they won't pull nodes)
+    const connectionCounts = {};
+    lettersData.forEach(letter => {
+        (letter.receivers || []).forEach(receiver => {
+            const key = letter.sender < receiver ? `${letter.sender}|${receiver}` : `${receiver}|${letter.sender}`;
+            if (!connectionCounts[key]) connectionCounts[key] = { count: 0, connections: [] };
+            connectionCounts[key].count++;
+            connectionCounts[key].connections.push({
+                source: letter.sender,
+                target: receiver,
+                type: letter.type,
+                number: letter.number,
+                date: letter.date,
+                dateObj: new Date(letter.date),
+                isOCSender: letter.isOCSender || false,
+                rawLetter: letter
+            });
+        });
+    });
+
+    const links = [];
+    Object.keys(connectionCounts).forEach(key => {
+        const connInfo = connectionCounts[key];
+        connInfo.connections.forEach((conn, idx) => {
+            const sourceNode = nodeById[conn.source];
+            const targetNode = nodeById[conn.target];
+            if (!sourceNode || !targetNode) return;
+            const totalLinks = connInfo.count;
+            const offset = totalLinks > 1 ? (idx - (totalLinks - 1) / 2) * 3 : 0;
+            links.push({
+                source: sourceNode,
+                target: targetNode,
+                type: conn.type,
+                number: conn.number,
+                date: conn.date,
+                dateObj: conn.dateObj,
+                isOCSender: conn.isOCSender,
+                offset: offset,
+                totalConnections: totalLinks,
+                visible: false,
+                rawLetter: conn.rawLetter
+            });
+        });
+    });
+
+    // A-rings metadata — sort them by date
+    const senderRings = {};
+    lettersData.filter(l => l.type === "A" && !l.isOCSender && l.sender).forEach(letter => {
+        const sender = letter.sender;
+        const letterDate = new Date(letter.date);
+        if (!senderRings[sender]) senderRings[sender] = [];
+        senderRings[sender].push({ dateObj: letterDate, letter });
+    });
+    Object.keys(senderRings).forEach(s => {
+        senderRings[s].sort((a, b) => a.dateObj - b.dateObj);
+    });
+
+    // particles pool (unchanged)
+    const particles = [];
+    for (let i = 0; i < links.length && particles.length < 60; i++) {
+        const l = links[i];
+        if (l.type === 'B' || l.type === 'C') {
+            particles.push({
+                linkIndex: i,
+                position: Math.random(),
+                speed: 0.004 + Math.random() * 0.01,
+                size: l.type === 'C' ? 3 : 2
+            });
+        }
+    }
+
+    // pulse rings per node (unchanged)
+    const pulseRings = nodes.map((n, idx) => ({
+        ownerId: n.id,
+        minRadius: n.isOC ? 13 : 10,
+        maxRadius: n.isOC ? 33 : 30,
+        currentRadius: n.isOC ? 13 : 10,
+        growing: true,
+        opacity: 0.12,
+        speed: 0.3 + Math.random() * 0.9,
+        colorH: n.isOC ? (120 + idx * 10 % 360) : (180 + idx * 5 % 360)
+    }));
+
+    // star background
+    canvas._stars = [];
+    for (let i = 0; i < 60; i++) {
+        canvas._stars.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            r: Math.random() * 1.5 + 0.3,
+            alpha: Math.random() * 0.5 + 0.2
+        });
+    }
+
+    // Force params (used only in initial temp layout)
+    const FORCE_PARAMS = {
+        charge: -30,
+        linkDistance: 80,
+        collideOC: 12,
+        collideUser: 6,
+        xStrength: 0.6,
+        yStrength: 0.05 // low y strength - we already positioned y deterministically
+    };
+
+    // ---------------------------
+    // INITIAL LAYOUT (one-time)：
+    // - run a temporary simulation for a number of ticks to settle x positions (along timeScale) and resolve collisions
+    // - do NOT keep this simulation running; after ticking we fix positions (fx/fy) so playback won't move nodes
+    // ---------------------------
+
+// ...existing code...
+
+    // ---------------------------
+    // INITIAL LAYOUT helper（替代原有一次性 tempSim 区块）：
+    // - 在初始化或 resize 时运行一次临时 force 布局以稳定位置，然后把节点固定（fx/fy）
+    // - 之后播放仅改变 visible，不再触发布局变化
+    let view = { scale: 1, tx: 0, ty: 0 };
+    // ---------------------------
+    let layoutFixed = false;
+
+    function computeInitialLayout(ticks = 300) {
+        // ensure timeScale range is up to date (resize handler 保证 timeScale.range 已同步)
+        const tempLinks = links.map(l => ({ source: l.source.id, target: l.target.id }));
+        const tempSim = d3.forceSimulation(nodes)
+            .force("charge", d3.forceManyBody().strength(FORCE_PARAMS.charge))
+            .force("x", d3.forceX(d => timeScale(new Date(d.registerDate))).strength(FORCE_PARAMS.xStrength))
+            .force("y", d3.forceY(d => d.y).strength(FORCE_PARAMS.yStrength))
+            .force("collision", d3.forceCollide().radius(d => d.isOC ? FORCE_PARAMS.collideOC : FORCE_PARAMS.collideUser))
+            // link strength 0 — 保留视觉 links 数据结构但不牵拉节点
+            .force("link", d3.forceLink(tempLinks).id(d => d.id).distance(FORCE_PARAMS.linkDistance).strength(0));
+
+        for (let i = 0; i < ticks; i++) tempSim.tick();
+        tempSim.stop();
+
+        // freeze positions so playback won't move nodes
+        nodes.forEach(n => {
+            n.fx = n.x;
+            n.fy = n.y;
+        });
+
+        // compute view fit once (基于固定位置)
+        computeFit();
+
+        layoutFixed = true;
+        // allow GC for tempSim
+    }
+
+    // We do not keep a running simulation that modifies node positions.
+    // If any code references simulation, guard those calls with `if (simulation) { ... }`.
+    let simulation = null; // intentionally null: no ongoing force layout
+
+    // run initial layout now
+    computeInitialLayout(300);
+
+// ...existing code...
+
+    // VIEW transform
+
+    function computeFit(marginRatio = 0.08) {
+        // pick nodes that are visible (or all)
+        const visibleNodes = nodes.filter(n => n.visible !== false);
+        const used = visibleNodes.length ? visibleNodes : nodes;
+        if (!used.length) {
+            view = { scale: 1, tx: 0, ty: 0 };
+            return;
+        }
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        used.forEach(n => {
+            if (n.x < minX) minX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.x > maxX) maxX = n.x;
+            if (n.y > maxY) maxY = n.y;
+        });
+        const bw = Math.max(1, maxX - minX);
+        const bh = Math.max(1, maxY - minY);
+        const marginW = width * marginRatio;
+        const marginH = height * marginRatio;
+        const availableW = Math.max(1, width - marginW * 2);
+        const availableH = Math.max(1, height - marginH * 2);
+        let scaleX = availableW / bw;
+        let scaleY = availableH / bh;
+        // prefer X compression (we want Y to be compact), so choose a scale that favors width fit
+        let scale = Math.min(scaleX, scaleY);
+        scale = Math.min(scale, 1.5);
+        scale = Math.max(0.02, scale);
+        const bboxCx = (minX + maxX) / 2;
+        const bboxCy = (minY + maxY) / 2;
+        const tx = width / 2 - bboxCx * scale;
+        const ty = height / 2 - bboxCy * scale;
+        view = { scale, tx, ty };
+    }
+
+    // initial fit
+    computeFit();
+
+    // helper: quadratic control same as before
+    function computeQuadraticControl(sourceX, sourceY, targetX, targetY, total, offset) {
+        const idx = offset ? (offset / 3 + (total - 1) / 2) : 0;
+        const curve = 40 * (idx - (total - 1) / 2);
+        const dx = targetX - sourceX;
+        const dy = targetY - sourceY;
+        const len = Math.hypot(dx, dy) || 1;
+        const cx = (sourceX + targetX) / 2 + curve * (dy) / len;
+        const cy = (sourceY + targetY) / 2 - curve * (dx) / len;
+        return { cx, cy };
+    }
+
+    // distance from point to quadratic bezier
+    function distancePointToQuadratic(px, py, x0, y0, cx, cy, x1, y1, steps = 28) {
+        let minDist = Infinity;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const ix = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
+            const iy = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * cy + t * t * y1;
+            const d = Math.hypot(px - ix, py - iy);
+            if (d < minDist) minDist = d;
+        }
+        return minDist;
+    }
+
+    // update node send/recv counters for a given date (we store counts on node objects)
+    function updateNodeCounters(date) {
+        // zero counters first
+        nodes.forEach(n => { n.sentCount = 0; n.recvCount = 0; });
+        // iterate lettersData and increment counters for those <= date
+        lettersData.forEach(ld => {
+            const dObj = ld.dateObj ? ld.dateObj : new Date(ld.date);
+            if (dObj <= date) {
+                // sender increments sentCount (if node exists)
+                const sNode = nodeById[ld.sender];
+                if (sNode) sNode.sentCount = (sNode.sentCount || 0) + 1;
+                // receivers: could be array
+                (ld.receivers || []).forEach(rcv => {
+                    const rNode = nodeById[rcv];
+                    if (rNode) rNode.recvCount = (rNode.recvCount || 0) + 1;
+                });
+            }
+        });
+    }
+
+    // core: onTick renders scene (no force layout updates here)
+    function onTick() {
+        if (!(currentDate instanceof Date)) currentDate = new Date(minDate);
+
+        // update visibility based on currentDate
+        nodes.forEach(n => { n.visible = n.registerDateObj <= currentDate; });
+        links.forEach(l => {
+            l.visible = (l.source.registerDateObj <= currentDate) &&
+                        (l.target.registerDateObj <= currentDate) &&
+                        (l.dateObj <= currentDate);
+        });
+
+        // clear and set transform
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.setTransform(DPR * view.scale, 0, 0, DPR * view.scale, DPR * view.tx, DPR * view.ty);
+
+        // stars
+        ctx.save();
+        canvas._stars.forEach(s => {
+            ctx.globalAlpha = s.alpha;
+            ctx.beginPath();
+            ctx.fillStyle = 'rgba(0,200,255,1)';
+            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+        ctx.restore();
+
+        // draw links (base)
+        ctx.save();
+        ctx.lineCap = 'round';
+        links.forEach(l => {
+            if (!l.visible) return;
+            const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+            let stroke = 'rgba(150,150,150,0.7)';
+            if (l.isOCSender) {
+                if (l.type === 'B') stroke = 'rgba(255,100,100,0.7)';
+                if (l.type === 'C') stroke = 'rgba(255,200,0,0.7)';
+            } else {
+                if (l.type === 'A') stroke = 'rgba(0,255,255,0.7)';
+                if (l.type === 'B') stroke = 'rgba(255,100,255,0.7)';
+                if (l.type === 'C') stroke = 'rgba(255,200,0,0.7)';
+            }
+            ctx.beginPath();
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = l.isOCSender ? (l.type === 'C' ? 2.5 : 2) : (l.type === 'C' ? 2 : 1);
+            ctx.globalAlpha = 0.25;
+            ctx.moveTo(sx, sy);
+            ctx.quadraticCurveTo(ctrl.cx, ctrl.cy, tx, ty);
+            ctx.stroke();
+        });
+        ctx.restore();
+
+        // broadcast lines for OC B
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        lettersData.forEach(letter => {
+            if (letter.type === "B" && letter.isOCSender && letter.isBroadcast) {
+                const senderNode = nodeById[letter.sender];
+                if (!senderNode || !senderNode.visible) return;
+                const letterDate = new Date(letter.date);
+                if (letterDate > currentDate) return;
+                const lineCount = 5;
+                if (!letter._rand) {
+                    letter._rand = [];
+                    for (let ii = 0; ii < lineCount; ii++) letter._rand.push(Math.random() * 20);
+                }
+                for (let i = 0; i < lineCount; i++) {
+                    const angle = (2 * Math.PI / lineCount) * i + (Date.now() % 360) * 0.0005;
+                    const length = 50 + letter._rand[i];
+                    const endX = senderNode.x + Math.cos(angle) * length;
+                    const endY = senderNode.y + Math.sin(angle) * length;
+                    ctx.beginPath();
+                    ctx.globalAlpha = 0.65;
+                    ctx.strokeStyle = 'rgba(255,100,100,0.8)';
+                    ctx.moveTo(senderNode.x, senderNode.y);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+                }
+            }
+        });
+        ctx.restore();
+
+        // A-rings
+        ctx.save();
+        Object.keys(senderRings).forEach(sender => {
+            const owner = nodeById[sender];
+            if (!owner || !owner.visible) return;
+            const arr = senderRings[sender];
+            arr.forEach((rObj, idx) => {
+                if (rObj.dateObj > currentDate) return;
+                const rad = 12 + idx * 8;
+                const alpha = Math.max(0.2, 0.7 - idx * 0.08);
+                ctx.beginPath();
+                ctx.strokeStyle = `rgba(0,255,255,${alpha})`;
+                ctx.lineWidth = 1;
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.arc(owner.x, owner.y, rad, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+        });
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
+
+        // pulse rings
+        ctx.save();
+        pulseRings.forEach(p => {
+            const ownerNode = nodeById[p.ownerId];
+            if (!ownerNode || !ownerNode.visible) return;
+            if (p.growing) {
+                p.currentRadius += p.speed;
+                if (p.currentRadius >= p.maxRadius) { p.currentRadius = p.maxRadius; p.growing = false; }
+            } else {
+                p.currentRadius -= p.speed;
+                if (p.currentRadius <= p.minRadius) { p.currentRadius = p.minRadius; p.growing = true; }
+            }
+            const fade = 0.15 - (p.currentRadius - p.minRadius) / (p.maxRadius - p.minRadius) * 0.1;
+            ctx.beginPath();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = `hsla(${p.colorH},100%,70%,${Math.max(0.05, fade)})`;
+            ctx.arc(ownerNode.x, ownerNode.y, p.currentRadius, 0, Math.PI * 2);
+            ctx.stroke();
+        });
+        ctx.restore();
+
+        // particles
+        ctx.save();
+        particles.forEach(pr => {
+            const l = links[pr.linkIndex];
+            if (!l || !l.visible) return;
+            pr.position += pr.speed;
+            if (pr.position > 1) pr.position = 0;
+            const t = pr.position;
+            const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+            const x = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * ctrl.cx + t * t * tx;
+            const y = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * ctrl.cy + t * t * ty;
+            ctx.beginPath();
+            ctx.fillStyle = l.type === 'B' ? 'rgba(255,100,255,0.95)' : 'rgba(255,200,0,0.95)';
+            ctx.arc(x, y, pr.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.restore();
+
+        // nodes
+        ctx.save();
+        nodes.forEach((n, i) => {
+            if (!n.visible) return;
+            ctx.beginPath();
+            ctx.fillStyle = n.isOC ? `hsla(${120 + (i * 12) % 360},100%,60%,0.95)` : `hsla(${180 + (i * 8) % 360},100%,55%,0.9)`;
+            ctx.shadowColor = 'rgba(0,255,255,0.25)';
+            ctx.shadowBlur = n.isOC ? 8 : 4;
+            ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            if (n.isOC) {
+                ctx.save();
+                ctx.fillStyle = 'white';
+                ctx.font = '8px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('OC', n.x, n.y);
+                ctx.restore();
+            }
+        });
+        ctx.restore();
+
+        // overlay highlights if any (hovered link or node)
+        if (hoveredLink) {
+            ctx.save();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+            ctx.globalAlpha = 1;
+            const l = hoveredLink;
+            const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.quadraticCurveTo(ctrl.cx, ctrl.cy, tx, ty);
+            ctx.stroke();
+            ctx.restore();
+        }
+        if (hoveredNode) {
+            ctx.save();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(0,255,255,0.95)';
+            ctx.beginPath();
+            ctx.arc(hoveredNode.x, hoveredNode.y, hoveredNode.r + 5, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+        if (hoveredRing) {
+            // draw ring highlight if needed
+            ctx.save();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(0,255,255,0.95)';
+            ctx.beginPath();
+            ctx.arc(hoveredRing.owner.x, hoveredRing.owner.y, hoveredRing.rad, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+    } // end onTick
+
+    // continuous render loop (we are not relying on d3 simulation ticks anymore)
+    function continuousRender() {
+        onTick();
+        requestAnimationFrame(continuousRender);
+    }
+    continuousRender();
+
+    // interaction / state for dragging/panning
+    let draggingNode = null;
+    let dragOffset = { x: 0, y: 0 };
+    let panning = false;
+    let panStart = null;
+
+    // client -> world conversion using view transform
+    function clientToWorld(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const cssX = clientX - rect.left;
+        const cssY = clientY - rect.top;
+        const worldX = (cssX - view.tx) / view.scale;
+        const worldY = (cssY - view.ty) / view.scale;
+        return { worldX, worldY, cssX, cssY };
+    }
+
+    function findNodeAtWorld(x, y) {
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            if (!n.visible) continue;
+            const dx = x - n.x;
+            const dy = y - n.y;
+            if (Math.hypot(dx, dy) <= n.r + 4) return n;
+        }
+        return null;
+    }
+
+    function findLinkAtWorld(x, y, threshold = 8 / Math.max(0.001, view.scale)) {
+        for (let i = 0; i < links.length; i++) {
+            const l = links[i];
+            if (!l.visible) continue;
+            const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
+            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+            const dist = distancePointToQuadratic(x, y, sx, sy, ctrl.cx, ctrl.cy, tx, ty, 30);
+            if (dist <= threshold) return l;
+        }
+        return null;
+    }
+
+    function findRingAtWorld(x, y, threshold = 6 / Math.max(0.001, view.scale)) {
+        for (const sender of Object.keys(senderRings)) {
+            const owner = nodeById[sender];
+            if (!owner || !owner.visible) continue;
+            const arr = senderRings[sender];
+            for (let idx = 0; idx < arr.length; idx++) {
+                const rObj = arr[idx];
+                if (rObj.dateObj > currentDate) continue;
+                const rad = 12 + idx * 8;
+                const d = Math.hypot(x - owner.x, y - owner.y);
+                if (Math.abs(d - rad) <= threshold) {
+                    return { owner, idx, rad, rObj };
+                }
+            }
+        }
+        return null;
+    }
+
+    function showTooltipAtClient(clientX, clientY, html) {
+        if (!tooltip) return;
+        tooltip.innerHTML = html;
+        tooltip.style.left = (clientX + 12) + 'px';
+        tooltip.style.top = (clientY - 20) + 'px';
+        tooltip.style.opacity = '1';
+        tooltip.style.display = 'block';
+    }
+    function hideTooltip() {
+        if (!tooltip) return;
+        tooltip.style.opacity = '0';
+        tooltip.style.display = 'none';
+    }
+
+    // Mousemove handler: hover, dragging, panning
+    canvas.addEventListener('mousemove', (evt) => {
+        // dragging node (manual drag) - we update fx/fy directly; no force simulation to drive movement
+        if (draggingNode) {
+            const p = clientToWorld(evt.clientX, evt.clientY);
+            draggingNode.fx = p.worldX - dragOffset.x;
+            draggingNode.fy = p.worldY - dragOffset.y;
+            // update node coords (so visuals follow instantly)
+            draggingNode.x = draggingNode.fx;
+            draggingNode.y = draggingNode.fy;
+            // recompute fit? no - keep view
+            return;
+        }
+
+        // panning
+        if (panning && panStart) {
+            const dx = evt.clientX - panStart.clientX;
+            const dy = evt.clientY - panStart.clientY;
+            view.tx = panStart.viewTx + dx;
+            view.ty = panStart.viewTy + dy;
+            if (tooltip && tooltip.style.display === 'block') {
+                tooltip.style.left = (evt.clientX + 12) + 'px';
+                tooltip.style.top = (evt.clientY - 20) + 'px';
+            }
+            return;
+        }
+
+        // normal hover detection
+        const p = clientToWorld(evt.clientX, evt.clientY);
+        const worldX = p.worldX, worldY = p.worldY;
+        const node = findNodeAtWorld(worldX, worldY);
+        if (node !== hoveredNode) {
+            hoveredNode = node;
+            hoveredLink = null;
+            hoveredRing = null;
+            if (!node) {
+                hideTooltip();
+            } else {
+                // show node counters (already computed in filterByDate)
+                const sent = node.sentCount || 0;
+                const recv = node.recvCount || 0;
+                const html = `<b>节点：</b>${node.id}<br><b>发出：</b>${sent}<br><b>收到：</b>${recv}`;
+                showTooltipAtClient(evt.clientX, evt.clientY, html);
+            }
+        } else {
+            // same node - update tooltip position
+            if (hoveredNode && tooltip && tooltip.style.display === 'block') {
+                tooltip.style.left = (evt.clientX + 12) + 'px';
+                tooltip.style.top = (evt.clientY - 20) + 'px';
+            }
+        }
+
+        if (!hoveredNode) {
+            const link = findLinkAtWorld(worldX, worldY);
+            if (link && link !== hoveredLink) {
+                hoveredLink = link;
+                hoveredRing = null;
+                // show single letter info (link may aggregate many; show first available rawLetter)
+                const letter = link.rawLetter || {};
+                const sender = link.source.id;
+                const receivers = link.target.id;
+                const number = link.number || (letter.number || '');
+                const date = link.date || (letter.date || '');
+                const type = link.type || (letter.type || '');
+                const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
+                showTooltipAtClient(evt.clientX, evt.clientY, html);
+            } else if (!link) {
+                if (hoveredLink) {
+                    hoveredLink = null;
+                    hideTooltip();
+                }
+            } else {
+                // same link - reposition tooltip
+                if (hoveredLink && tooltip && tooltip.style.display === 'block') {
+                    tooltip.style.left = (evt.clientX + 12) + 'px';
+                    tooltip.style.top = (evt.clientY - 20) + 'px';
+                }
+            }
+
+            // rings
+            if (!hoveredLink && !hoveredNode) {
+                const ringHit = findRingAtWorld(worldX, worldY);
+                if (ringHit) {
+                    hoveredLink = null;
+                    hoveredNode = null;
+                    hoveredRing = ringHit;
+                    const rObj = ringHit.rObj;
+                    const sender = ringHit.owner.id;
+                    const receivers = (rObj.letter && rObj.letter.receivers) ? rObj.letter.receivers.join(',') : '';
+                    const number = (rObj.letter && rObj.letter.number) || '';
+                    const date = (rObj.letter && rObj.letter.date) || rObj.dateObj.toISOString().slice(0,10);
+                    const type = 'A';
+                    const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
+                    showTooltipAtClient(evt.clientX, evt.clientY, html);
+                } else {
+                    hoveredRing = null;
+                }
+            } else {
+                hoveredRing = null;
+            }
+        } else {
+            // if hovering node, clear link/ring
+            hoveredLink = null;
+            hoveredRing = null;
+        }
+    });
+
+    // mousedown: either start dragging node or panning
+    canvas.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return;
+        const p = clientToWorld(evt.clientX, evt.clientY);
+        const node = findNodeAtWorld(p.worldX, p.worldY);
+        if (node) {
+            draggingNode = node;
+            dragOffset.x = p.worldX - node.x;
+            dragOffset.y = p.worldY - node.y;
+            // lock node to mouse by setting fx/fy (we already had fx/fy fixed)
+            node.fx = node.x;
+            node.fy = node.y;
+            // make cursor grabbing
+            canvas.style.cursor = 'grabbing';
+        } else {
+            panning = true;
+            panStart = {
+                clientX: evt.clientX,
+                clientY: evt.clientY,
+                viewTx: view.tx,
+                viewTy: view.ty
+            };
+            canvas.style.cursor = 'grabbing';
+        }
+    });
+
+    // mouseup: stop dragging or panning
+    window.addEventListener('mouseup', (evt) => {
+        if (draggingNode) {
+            // keep node fixed at new position (we leave fx/fy = x/y so nodes remain fixed)
+            draggingNode.x = draggingNode.fx;
+            draggingNode.y = draggingNode.fy;
+            // ensure counters unaffected
+            draggingNode = null;
+            canvas.style.cursor = 'default';
+        }
+        if (panning) {
+            panning = false;
+            panStart = null;
+            canvas.style.cursor = 'default';
+        }
+    });
+
+    canvas.addEventListener('dblclick', (evt) => {
+        // reset fit
+        computeFit();
+    });
+
+    // wheel zoom (center on mouse)
+    canvas.addEventListener('wheel', (evt) => {
+        evt.preventDefault();
+        const delta = -evt.deltaY;
+        const zoomFactor = Math.exp(delta * 0.0012);
+        const rect = canvas.getBoundingClientRect();
+        const cssX = evt.clientX - rect.left;
+        const cssY = evt.clientY - rect.top;
+        const wx = (cssX - view.tx) / view.scale;
+        const wy = (cssY - view.ty) / view.scale;
+        let newScale = view.scale * zoomFactor;
+        newScale = Math.max(0.02, Math.min(4, newScale));
+        view.tx = cssX - wx * newScale;
+        view.ty = cssY - wy * newScale;
+        view.scale = newScale;
+        if (tooltip && tooltip.style.display === 'block') {
+            tooltip.style.left = (evt.clientX + 12) + 'px';
+            tooltip.style.top = (evt.clientY - 20) + 'px';
+        }
+    }, { passive: false });
+
+    // time controls (reuse DOM if present)
+    const timeSlider = document.getElementById('timeSlider');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const playButton = document.getElementById('playButton');
+    const resetButton = document.getElementById('resetButton');
+    const speedOptions = document.querySelectorAll('.speed-option');
+
+    if (timeSlider) {
+        timeSlider.min = 0;
+        timeSlider.max = 100;
+        timeSlider.value = 0;
+    }
+
+    function updateTimeDisplay(date) {
+        const d = date || currentDate;
+        if (timeDisplay) timeDisplay.textContent = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function setCurrentDateFromSliderValue(valuePercent) {
+        const p = Math.max(0, Math.min(100, Number(valuePercent)));
+        const timeRange = maxDate.getTime() - minDate.getTime();
+        const newTime = minDate.getTime() + (timeRange * (p / 100));
+        currentDate = new Date(newTime);
+        filterByDate(currentDate);
+        onTick();
+    }
+
+// ...existing code...
+
+    function filterByDate(date) {
+        // set visibility (onTick will draw accordingly)
+        nodes.forEach(n => n.visible = n.registerDateObj <= date);
+        links.forEach(link => {
+            const sourceVisible = link.source && link.source.registerDateObj && link.source.registerDateObj <= date;
+            const targetVisible = link.target && link.target.registerDateObj && link.target.registerDateObj <= date;
+            link.visible = sourceVisible && targetVisible && link.dateObj <= date;
+        });
+        // update counters for tooltips
+        updateNodeCounters(date);
+        updateTimeDisplay(date);
+        // 不要在播放过程中重新计算布局或视图：时间线只控制可见性
+        // 如需用户触发的“聚焦可见子集”，请提供单独按钮调用 computeFit()
+    }
+
+// ...existing code...
+    if (timeSlider) {
+        timeSlider.addEventListener('input', function() {
+            setCurrentDateFromSliderValue(this.value);
+        });
+    }
+
+    function startPlay() {
+        if (playInterval) return;
+        if (playButton) playButton.textContent = "⏸ Pause";
+        playInterval = setInterval(() => {
+            const step = 24 * 60 * 60 * 1000 * playSpeed;
+            const next = new Date(currentDate.getTime() + step);
+            if (next >= maxDate) {
+                currentDate = new Date(maxDate);
+                if (timeSlider) timeSlider.value = 100;
+                filterByDate(currentDate);
+                onTick();
+                clearInterval(playInterval);
+                playInterval = null;
+                if (playButton) playButton.textContent = "▶ Play";
+                return;
+            }
+            currentDate = next;
+            const percent = (currentDate.getTime() - minDate.getTime()) / (maxDate.getTime() - minDate.getTime()) * 100;
+            if (timeSlider) timeSlider.value = percent;
+            filterByDate(currentDate);
+            onTick();
+        }, 120);
+    }
+
+    function stopPlay() {
+        if (!playInterval) return;
+        clearInterval(playInterval);
+        playInterval = null;
+        if (playButton) playButton.textContent = "▶ Play";
+    }
+
+    function togglePlay() {
+        if (playInterval) stopPlay();
+        else startPlay();
+    }
+
+    if (playButton) playButton.addEventListener('click', togglePlay);
+    if (resetButton) resetButton.addEventListener('click', () => {
+        stopPlay();
+        currentDate = new Date(minDate);
+        if (timeSlider) timeSlider.value = 0;
+        filterByDate(currentDate);
+        onTick();
+    });
+
+    speedOptions.forEach(opt => {
+        opt.addEventListener('click', function() {
+            speedOptions.forEach(o => o.classList.remove('active'));
+            this.classList.add('active');
+            playSpeed = parseFloat(this.dataset.speed || '1');
+            if (playInterval) {
+                stopPlay();
+                startPlay();
+            }
+        });
+    });
+
+    // initialize (set date, compute counters, initial visibility)
+    currentDate = new Date(minDate);
+    if (timeSlider) timeSlider.value = 0;
+    filterByDate(currentDate);
+    updateTimeDisplay();
+
+    // expose setter
+    window.__setVisualizationDatePercent = setCurrentDateFromSliderValue;
+} // end initVisualization
+
+document.addEventListener('DOMContentLoaded', initVisualization);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrackPost Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Rajdhani', 'Roboto', sans-serif;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #visualization {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px 12px;
+            background: rgba(0, 180, 255, 0.2);
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            border-radius: 4px;
+            pointer-events: none;
+            color: #00f7ff;
+            font-size: 14px;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+            transition: all 0.3s ease;
+            opacity: 0;
+            z-index: 1000;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .node:hover {
+            filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.8));
+        }
+
+        .link {
+            transition: all 0.3s;
+            opacity: 0.2; /* 默认状态下线条更暗 */
+        }
+
+        .link:hover {
+            stroke-width: 2;
+            filter: drop-shadow(0 0 5px rgba(0, 255, 255, 0.8));
+            opacity: 0.7;
+        }
+
+        .type-A {
+            stroke: rgba(0, 255, 255, 0.7);
+        }
+
+        .type-B {
+            stroke: rgba(255, 100, 255, 0.7);
+        }
+
+        .type-C {
+            stroke: rgba(255, 200, 0, 0.7);
+        }
+
+        .particle {
+            fill: white;
+            opacity: 0.7;
+        }
+
+        /* 网格背景 */
+        .grid-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 200, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 200, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+        }
+
+        /* 标题样式 */
+        h1 {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(0, 200, 255, 0.8);
+            font-weight: 300;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin: 0;
+            padding: 10px 20px;
+            border-bottom: 1px solid rgba(0, 200, 255, 0.3);
+            background: rgba(0, 20, 40, 0.3);
+            backdrop-filter: blur(5px);
+            border-radius: 4px;
+            z-index: 100;
+        }
+
+        /* 控制面板样式 */
+        .controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 800px;
+            background: rgba(0, 20, 40, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .time-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .slider-container {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .time-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 90%;
+            height: 6px;
+            background: rgba(0, 120, 180, 0.3);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .time-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: rgb(0, 200, 255);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 200, 255, 0.8);
+        }
+
+        .time-display {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-left: 15px;
+            min-width: 100px;
+            text-align: left;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .control-button {
+            background: rgba(0, 100, 150, 0.4);
+            border: 1px solid rgba(0, 200, 255, 0.4);
+            color: rgba(0, 220, 255, 0.9);
+            padding: 8px 15px;
+            margin: 0 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .control-button:hover {
+            background: rgba(0, 150, 200, 0.5);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+        }
+
+        .control-button:active {
+            background: rgba(0, 180, 230, 0.6);
+        }
+
+        /* 进度速度控制 */
+        .speed-control {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .speed-label {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-right: 10px;
+        }
+
+        .speed-options {
+            display: flex;
+        }
+
+        .speed-option {
+            padding: 3px 8px;
+            margin: 0 3px;
+            border-radius: 3px;
+            color: rgba(0, 200, 255, 0.6);
+            cursor: pointer;
+            font-size: 12px;
+            border: 1px solid transparent;
+        }
+
+        .speed-option.active {
+            border-color: rgba(0, 200, 255, 0.6);
+            color: rgba(0, 220, 255, 0.9);
+        }
+
+        .pulse-ring {
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-background"></div>
+    <h1>CrackPost Visualization</h1>
+    <div class="tooltip"></div>
+    <div id="visualization"></div>
+    
+    <div class="controls">
+        <div class="slider-container">
+            <input type="range" min="0" max="100" value="100" class="time-slider" id="timeSlider">
+            <div class="time-display" id="timeDisplay">All Data</div>
+        </div>
+        <div class="button-container">
+            <button class="control-button" id="playButton">▶ Play</button>
+            <button class="control-button" id="resetButton">↺ Reset</button>
+        </div>
+        <div class="speed-control">
+            <div class="speed-label">Speed:</div>
+            <div class="speed-options">
+                <div class="speed-option" data-speed="0.5">0.5x</div>
+                <div class="speed-option active" data-speed="1">1x</div>
+                <div class="speed-option" data-speed="2">2x</div>
+                <div class="speed-option" data-speed="5">5x</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 扩展的英文名模拟数据
+        const usersData = [
+            { email: "john.smith@example.com", name: "John Smith", registerDate: "2024-01-15" },
+            { email: "emily.johnson@example.com", name: "Emily Johnson", registerDate: "2024-02-03" },
+            { email: "michael.williams@example.com", name: "Michael Williams", registerDate: "2024-02-27" },
+            { email: "sarah.brown@example.com", name: "Sarah Brown", registerDate: "2024-03-10" },
+            { email: "david.jones@example.com", name: "David Jones", registerDate: "2024-04-05" },
+            { email: "jennifer.davis@example.com", name: "Jennifer Davis", registerDate: "2024-05-12" },
+            { email: "robert.miller@example.com", name: "Robert Miller", registerDate: "2024-06-20" },
+            { email: "laura.wilson@example.com", name: "Laura Wilson", registerDate: "2024-07-08" },
+            { email: "thomas.moore@example.com", name: "Thomas Moore", registerDate: "2024-08-14" },
+            { email: "patricia.taylor@example.com", name: "Patricia Taylor", registerDate: "2024-09-22" },
+            { email: "james.anderson@example.com", name: "James Anderson", registerDate: "2024-10-05" },
+            { email: "elizabeth.thomas@example.com", name: "Elizabeth Thomas", registerDate: "2024-11-12" },
+            { email: "charles.jackson@example.com", name: "Charles Jackson", registerDate: "2024-12-03" },
+            { email: "linda.white@example.com", name: "Linda White", registerDate: "2025-01-18" },
+            { email: "richard.harris@example.com", name: "Richard Harris", registerDate: "2025-02-09" },
+            { email: "barbara.martin@example.com", name: "Barbara Martin", registerDate: "2025-03-22" },
+            { email: "joseph.thompson@example.com", name: "Joseph Thompson", registerDate: "2025-04-11" },
+            { email: "susan.garcia@example.com", name: "Susan Garcia", registerDate: "2025-05-26" },
+            { email: "edward.martinez@example.com", name: "Edward Martinez", registerDate: "2025-06-14" },
+            { email: "margaret.robinson@example.com", name: "Margaret Robinson", registerDate: "2025-07-30" }
+        ];
+
+        // 扩展的信件模拟数据
+        const lettersData = [
+            { sender: "John Smith", type: "A", number: "A001", date: "2024-02-20", receivers: [] },
+            { sender: "John Smith", type: "A", number: "A003", date: "2024-02-11", receivers: [] },
+            { sender: "John Smith", type: "B", number: "B001", date: "2024-02-25", receivers: ["Emily Johnson", "Michael Williams", "Sarah Brown", "David Jones", "Jennifer Davis"] },
+            { sender: "Emily Johnson", type: "A", number: "A002", date: "2024-03-05", receivers: [] },
+            { sender: "Michael Williams", type: "C", number: "C001", date: "2024-03-15", receivers: ["John Smith"] },
+            { sender: "Sarah Brown", type: "A", number: "A003", date: "2024-04-10", receivers: [] },
+            { sender: "Sarah Brown", type: "B", number: "B002", date: "2024-04-12", receivers: ["John Smith", "Emily Johnson", "Michael Williams", "David Jones", "Jennifer Davis"] },
+            { sender: "John Smith", type: "B", number: "B008", date: "2024-04-15", receivers: ["Emily Johnson", "Michael Williams"] }, // 重复通信
+            { sender: "David Jones", type: "A", number: "A004", date: "2024-05-01", receivers: [] },
+            { sender: "Jennifer Davis", type: "C", number: "C002", date: "2024-05-20", receivers: ["Sarah Brown"] },
+            { sender: "Emily Johnson", type: "C", number: "C007", date: "2024-06-05", receivers: ["John Smith"] }, // 重复通信
+            { sender: "Robert Miller", type: "A", number: "A005", date: "2024-07-03", receivers: [] },
+            { sender: "Laura Wilson", type: "B", number: "B003", date: "2024-07-25", receivers: ["John Smith", "Michael Williams", "Sarah Brown", "Robert Miller", "Thomas Moore"] },
+            { sender: "Thomas Moore", type: "A", number: "A006", date: "2024-09-01", receivers: [] },
+            { sender: "Patricia Taylor", type: "C", number: "C003", date: "2024-09-30", receivers: ["Laura Wilson"] },
+            { sender: "James Anderson", type: "A", number: "A007", date: "2024-10-15", receivers: [] },
+            { sender: "Elizabeth Thomas", type: "B", number: "B004", date: "2024-11-20", receivers: ["Patricia Taylor", "James Anderson", "Charles Jackson", "Linda White", "Richard Harris"] },
+            { sender: "Charles Jackson", type: "C", number: "C004", date: "2024-12-25", receivers: ["Elizabeth Thomas"] },
+            { sender: "Linda White", type: "A", number: "A008", date: "2025-02-01", receivers: [] },
+            { sender: "Richard Harris", type: "B", number: "B005", date: "2025-02-15", receivers: ["Linda White", "Barbara Martin", "Joseph Thompson", "Susan Garcia", "Edward Martinez"] },
+            { sender: "Barbara Martin", type: "A", number: "A009", date: "2025-03-30", receivers: [] },
+            { sender: "Joseph Thompson", type: "C", number: "C005", date: "2025-04-25", receivers: ["Barbara Martin"] },
+            { sender: "John Smith", type: "B", number: "B009", date: "2025-05-10", receivers: ["Barbara Martin", "Richard Harris"] }, // 更多重复通信
+            { sender: "Susan Garcia", type: "A", number: "A010", date: "2025-06-05", receivers: [] },
+            { sender: "Edward Martinez", type: "B", number: "B006", date: "2025-06-20", receivers: ["Susan Garcia", "Margaret Robinson", "John Smith", "Emily Johnson", "Michael Williams"] },
+            { sender: "Margaret Robinson", type: "A", number: "A011", date: "2025-08-10", receivers: [] },
+            { sender: "Margaret Robinson", type: "C", number: "C006", date: "2025-08-15", receivers: ["Edward Martinez"] }
+        ];
+
+        // 处理A类信件接收者（发信日期前注册的所有人）
+        lettersData.forEach(letter => {
+            if (letter.type === "A") {
+                const senderDate = new Date(letter.date);
+                letter.receivers = usersData
+                    .filter(user => new Date(user.registerDate) < senderDate && user.name !== letter.sender)
+                    .map(user => user.name);
+            }
+        });
+
+        // 时间相关变量
+        const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
+        const minDate = new Date(allDates[0]);
+        const maxDate = new Date(allDates[allDates.length - 1]);
+        let currentDate = new Date(maxDate); // 默认显示所有数据
+        let playInterval = null;
+        let playSpeed = 1; // 默认速度
+
+        // 设置可视化尺寸
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const centerX = width / 2;
+        const centerY = height / 2;
+
+        // 创建时间刻度比例尺，用于根据注册日期布局
+        const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
+        const timeScale = d3.scaleTime()
+            .domain(dateExtent)
+            .range([0, width]);
+
+        // 创建SVG - 确保占满整个视窗
+        const svg = d3.select("#visualization")
+            .append("svg")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .attr("viewBox", `0 0 ${width} ${height}`)
+            .attr("preserveAspectRatio", "xMidYMid meet");
+
+        // 添加模糊滤镜效果
+        const defs = svg.append("defs");
+        const filter = defs.append("filter")
+            .attr("id", "glow")
+            .attr("x", "-50%")
+            .attr("y", "-50%")
+            .attr("width", "200%")
+            .attr("height", "200%");
+        
+        filter.append("feGaussianBlur")
+            .attr("stdDeviation", "3")
+            .attr("result", "blur");
+            
+        filter.append("feComposite")
+            .attr("in", "SourceGraphic")
+            .attr("in2", "blur")
+            .attr("operator", "over");
+
+        // 准备节点数据
+        const nodes = usersData.map(user => {
+            // 根据注册日期半随机布局初始位置
+            const registerDate = new Date(user.registerDate);
+            const x = timeScale(registerDate);
+            const yRandom = Math.random() * (height - 200) + 100; // 随机y位置，但留出边距
+            
+            return {
+                id: user.name,
+                name: user.name,
+                email: user.email,
+                registerDate: user.registerDate,
+                registerDateObj: registerDate, // 存储Date对象以便比较
+                x: x,
+                y: yRandom,
+                type: "user",
+                visible: true // 控制可见性
+            };
+        });
+
+        // 分析通信次数，处理重复连接
+        const connectionCounts = {};
+        lettersData.forEach(letter => {
+            letter.receivers.forEach(receiver => {
+                const key = letter.sender < receiver 
+                    ? `${letter.sender}|${receiver}` 
+                    : `${receiver}|${letter.sender}`;
+                
+                if (!connectionCounts[key]) {
+                    connectionCounts[key] = {
+                        count: 0,
+                        connections: []
+                    };
+                }
+                
+                connectionCounts[key].count++;
+                connectionCounts[key].connections.push({
+                    source: letter.sender,
+                    target: receiver,
+                    type: letter.type,
+                    number: letter.number,
+                    date: letter.date,
+                    dateObj: new Date(letter.date) // 存储Date对象以便比较
+                });
+            });
+        });
+
+        // 创建连接数据，考虑多次通信
+        const links = [];
+        Object.keys(connectionCounts).forEach(key => {
+            const connInfo = connectionCounts[key];
+            
+            connInfo.connections.forEach((conn, idx) => {
+                // 计算偏移量，使平行线不重叠
+                const totalLinks = connInfo.count;
+                const offset = totalLinks > 1 
+                    ? (idx - (totalLinks - 1) / 2) * 3 
+                    : 0;
+                
+                links.push({
+                    ...conn,
+                    offset: offset,
+                    totalConnections: totalLinks,
+                    visible: true // 控制可见性
+                });
+            });
+        });
+
+        // 创建力导向图布局，使用全屏布局
+        const simulation = d3.forceSimulation()
+            .force("link", d3.forceLink().id(d => d.id).distance(180)) // 增加链接距离
+            .force("charge", d3.forceManyBody().strength(-500)) // 增强排斥力
+            .force("center", d3.forceCenter(centerX, centerY).strength(0.01)) // 极弱中心力
+            .force("x", d3.forceX(d => d.x).strength(0.6)) // 更强的时间轴约束
+            .force("y", d3.forceY(d => d.y).strength(0.1)); // 保持随机Y约束
+
+        // 创建连接线组
+        const linkGroup = svg.append("g");
+
+        // 添加连接线 - 处理多次连接和可见性
+        const link = linkGroup.selectAll(".link")
+            .data(links)
+            .enter()
+            .append("line")
+            .attr("class", d => `link type-${d.type}`)
+            .attr("stroke", d => {
+                if (d.type === "A") return "rgba(0, 255, 255, 0.7)";
+                if (d.type === "B") return "rgba(255, 100, 255, 0.7)";
+                return "rgba(255, 200, 0, 0.7)";
+            })
+            .attr("stroke-width", d => d.type === "C" ? 2 : 1)
+            .style("filter", "url(#glow)")
+            .style("opacity", 0.2) // 默认更暗的连接线
+            .style("display", "block") // 初始全部可见
+            .on("mouseover", function(event, d) {
+                d3.select(this)
+                  .attr("stroke-width", d.type === "C" ? 3 : 2)
+                  .style("opacity", 0.8);
+                  
+                showTooltip(event, `${d.source.id} → ${d.target.id}<br>Type: ${d.type}<br>Number: ${d.number}<br>Date: ${d.date}`);
+            })
+            .on("mouseout", function() {
+                d3.select(this)
+                  .attr("stroke-width", d => d.type === "C" ? 2 : 1)
+                  .style("opacity", 0.2); // 恢复为暗色
+                  
+                hideTooltip();
+            });
+
+        // 为B和C类信件添加箭头标记
+        svg.append("defs").selectAll("marker")
+            .data(["B", "C"])
+            .enter().append("marker")
+            .attr("id", d => `arrow-${d}`)
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 25)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("fill", d => d === "B" ? "rgba(255, 100, 255, 0.9)" : "rgba(255, 200, 0, 0.9)")
+            .attr("d", "M0,-5L10,0L0,5");
+
+        // 更新连接线添加箭头
+        link.filter(d => d.type === "B" || d.type === "C")
+            .attr("marker-end", d => `url(#arrow-${d.type})`);
+
+        // 创建节点组
+        const nodeGroup = svg.append("g");
+
+        // 添加节点
+        const node = nodeGroup.selectAll(".node")
+            .data(nodes)
+            .enter()
+            .append("g")
+            .attr("class", "node")
+            .style("display", "block") // 初始全部可见
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+        // 添加圆形节点
+        node.append("circle")
+            .attr("r", 10)
+            .attr("fill", (d, i) => `hsla(${180 + i * 10}, 100%, 70%, 0.8)`)
+            .style("filter", "url(#glow)")
+            .on("mouseover", function(event, d) {
+                d3.select(this)
+                  .attr("r", 15)
+                  .style("opacity", 1);
+                  
+                showTooltip(event, `${d.name}<br>Email: ${d.email}<br>Register Date: ${d.registerDate}`);
+                
+                // 高亮相关连接，其他连接变暗
+                link.style("opacity", l => {
+                    if (l.source.id === d.id || l.target.id === d.id) return 0.8;
+                    return 0.05; // 其他连接变得更暗
+                });
+            })
+            .on("mouseout", function() {
+                d3.select(this)
+                  .attr("r", 10)
+                  .style("opacity", 0.8);
+                  
+                hideTooltip();
+                
+                // 恢复连接透明度
+                link.style("opacity", 0.2);
+            });
+
+        // 创建A类信件环形的映射，跟踪每个发送者的环形
+        const senderRings = {};
+
+        // 添加A类信件环形（修复环形跟随问题）
+        lettersData.filter(l => l.type === "A").forEach((letter, letterIndex) => {
+            const sender = letter.sender;
+            const letterDate = new Date(letter.date);
+            
+            // 为每个发送者创建环形数组
+            if (!senderRings[sender]) {
+                senderRings[sender] = [];
+            }
+            
+            // 创建新环并存储在映射中
+            const ring = svg.append("circle")
+                .attr("class", "type-A-ring")
+                .attr("r", 20 + senderRings[sender].length * 10) // 逐渐变大的环
+                .attr("fill", "none")
+                .attr("stroke", `rgba(0, 255, 255, ${0.7 - senderRings[sender].length * 0.1})`)
+                .attr("stroke-width", 1)
+                .style("filter", "url(#glow)")
+                .style("pointer-events", "none")
+                .style("display", "block") // 初始全部可见
+                .attr("data-sender", sender) // 使用data-sender属性存储发送者
+                .attr("data-date", letter.date); // 存储日期用于时间过滤
+                
+            senderRings[sender].push({ring: ring, date: letterDate});
+        });
+
+        // 添加动画粒子
+        const particles = [];
+        links.forEach((link, i) => {
+            if (link.type === "B" || link.type === "C") {
+                particles.push({
+                    link: i,
+                    position: 0,
+                    speed: 0.005 + Math.random() * 0.01, // 降低速度，减少闪烁感
+                    size: link.type === "C" ? 3 : 2,
+                    visible: true
+                });
+            }
+        });
+
+        const particleElements = svg.append("g")
+            .selectAll(".particle")
+            .data(particles)
+            .enter().append("circle")
+            .attr("class", "particle")
+            .attr("r", d => d.size)
+            .style("filter", "url(#glow)")
+            .style("display", "block") // 初始全部可见
+            .attr("fill", d => {
+                const linkType = links[d.link].type;
+                return linkType === "B" ? "rgba(255, 100, 255, 0.9)" : "rgba(255, 200, 0, 0.9)";
+            });
+
+        // 改进脉冲动画实现 - 使用requestAnimationFrame而非transition
+        const pulseRings = [];
+        
+        node.each(function(d) {
+            const color = `hsla(${180 + nodes.indexOf(d) * 10}, 100%, 70%, 0.8)`;
+            
+            const pulse = svg.append("circle")
+                .attr("class", "pulse-ring")
+                .attr("data-owner", d.id) // 添加数据属性以便更新
+                .attr("r", 10)
+                .attr("fill", "none")
+                .attr("stroke", color)
+                .attr("stroke-width", 2)
+                .style("opacity", 0)
+                .style("display", "block");
+
+            // 创建自定义脉冲动画对象
+            const pulseAnimation = {
+                element: pulse,
+                owner: d.id,
+                minRadius: 10,
+                maxRadius: 30,
+                currentRadius: 10,
+                growing: true,
+                opacity: 0,
+                speed: 0.5 + Math.random() * 0.5,
+                color: color,
+                visible: true
+            };
+            
+            pulseRings.push(pulseAnimation);
+        });
+
+        // 使用requestAnimationFrame实现更可靠的脉冲动画
+        function animatePulses() {
+            pulseRings.forEach(p => {
+                if (!p.visible) return;
+                
+                if (p.growing) {
+                    p.currentRadius += p.speed;
+                    p.opacity = Math.max(0, 0.2 - (p.currentRadius - p.minRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                    
+                    if (p.currentRadius >= p.maxRadius) {
+                        p.growing = false;
+                        p.currentRadius = p.maxRadius;
+                    }
+                } else {
+                    p.currentRadius -= p.speed;
+                    p.opacity = Math.max(0, 0.2 - (p.maxRadius - p.currentRadius) / (p.maxRadius - p.minRadius) * 0.2);
+                    
+                    if (p.currentRadius <= p.minRadius) {
+                        p.growing = true;
+                        p.currentRadius = p.minRadius;
+                    }
+                }
+                
+                p.element
+                    .attr("r", p.currentRadius)
+                    .style("opacity", p.opacity);
+            });
+            
+            requestAnimationFrame(animatePulses);
+        }
+
+        // 启动脉冲动画
+        animatePulses();
+
+        // 设置tooltip显示和隐藏函数
+        const tooltip = d3.select(".tooltip");
+
+        function showTooltip(event, text) {
+            tooltip.html(text)
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 30) + "px")
+                .transition()
+                .duration(200)
+                .style("opacity", 1);
+        }
+
+        function hideTooltip() {
+            tooltip.transition()
+                .duration(200)
+                .style("opacity", 0);
+        }
+
+        // 更新力导向图
+        simulation
+            .nodes(nodes)
+            .on("tick", ticked);
+
+        simulation.force("link")
+            .links(links);
+
+        function ticked() {
+            // 计算连接线偏移，处理多次通信连线
+            link.each(function(d) {
+                // 源和目标位置
+                const sourceX = d.source.x;
+                const sourceY = d.source.y;
+                const targetX = d.target.x;
+                const targetY = d.target.y;
+                
+                // 计算线的方向向量
+                const dx = targetX - sourceX;
+                const dy = targetY - sourceY;
+                
+                // 单位向量的垂直向量
+                const length = Math.sqrt(dx * dx + dy * dy);
+                const offsetX = -dy / length * d.offset;
+                const offsetY = dx / length * d.offset;
+                
+                // 设置带偏移量的线位置
+                d3.select(this)
+                    .attr("x1", sourceX + offsetX)
+                    .attr("y1", sourceY + offsetY)
+                    .attr("x2", targetX + offsetX)
+                    .attr("y2", targetY + offsetY);
+            });
+
+            // 更新节点位置
+            node
+                .attr("transform", d => `translate(${d.x}, ${d.y})`);
+
+            // 更新A类信件环形位置
+            svg.selectAll(".type-A-ring")
+                .each(function() {
+                    const sender = this.getAttribute("data-sender");
+                    if (sender) {
+                        const senderNode = nodes.find(n => n.id === sender);
+                        if (senderNode) {
+                            d3.select(this)
+                                .attr("cx", senderNode.x)
+                                .attr("cy", senderNode.y);
+                        }
+                    }
+                });
+
+            // 更新脉冲环形位置
+            pulseRings.forEach(p => {
+                const ownerNode = nodes.find(n => n.id === p.owner);
+                if (ownerNode) {
+                    p.element
+                        .attr("cx", ownerNode.x)
+                        .attr("cy", ownerNode.y)
+                        .style("display", ownerNode.visible ? "block" : "none");
+                    
+                    p.visible = ownerNode.visible;
+                }
+            });
+
+            // 更新粒子位置
+            particleElements.each(function(d) {
+                const l = links[d.link];
+                
+                if (!l.visible) {
+                    d3.select(this).style("display", "none");
+                    d.visible = false;
+                    return;
+                }
+                
+                d.visible = true;
+                d3.select(this).style("display", "block");
+                
+                // 源和目标位置，考虑偏移
+                const sourceX = l.source.x;
+                const sourceY = l.source.y;
+                const targetX = l.target.x;
+                const targetY = l.target.y;
+                
+                // 计算线的方向向量
+                const dx = targetX - sourceX;
+                const dy = targetY - sourceY;
+                
+                // 单位向量的垂直向量
+                const length = Math.sqrt(dx * dx + dy * dy);
+                const offsetX = -dy / length * l.offset;
+                const offsetY = dx / length * l.offset;
+                
+                // 更新粒子位置
+                d.position += d.speed;
+                if (d.position > 1) {
+                    d.position = 0;
+                }
+                
+                // 计算粒子在线上的位置，包含偏移
+                const x = sourceX + offsetX + (targetX - sourceX + 2 * offsetX) * d.position;
+                const y = sourceY + offsetY + (targetY - sourceY + 2 * offsetY) * d.position;
+                
+                d3.select(this)
+                    .attr("cx", x)
+                    .attr("cy", y);
+            });
+        }
+
+        // 拖拽函数
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        // 自适应窗口大小
+        window.addEventListener("resize", () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            
+            svg.attr("viewBox", `0 0 ${width} ${height}`);
+                
+            simulation.force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("x", d3.forceX(d => {
+                        // 重新计算时间轴，移除所有边距
+                        const timeScale = d3.scaleTime()
+                            .domain(dateExtent)
+                            .range([0, width]);
+                        const registerDate = new Date(d.registerDate);
+                        return timeScale(registerDate);
+                    }).strength(0.6))
+                    .alpha(0.5) // 增加重启强度
+                    .restart();
+        });
+
+        // 添加背景动画星星
+        const starsGroup = svg.append("g").attr("class", "stars");
+        
+        for (let i = 0; i < 50; i++) {
+            const x = Math.random() * width;
+            const y = Math.random() * height;
+            const size = Math.random() * 1.5 + 0.5;
+            const opacity = Math.random() * 0.5 + 0.25;
+            
+            const star = starsGroup.append("circle")
+                .attr("cx", x)
+                .attr("cy", y)
+                .attr("r", size)
+                .attr("fill", `rgba(0, 200, 255, ${opacity})`)
+                .style("filter", "url(#glow)");
+                
+            // 添加闪烁效果
+            function blink() {
+                star.transition()
+                    .duration(1000 + Math.random() * 3000)
+                    .attr("r", size * (0.5 + Math.random()))
+                    .style("opacity", 0.1 + Math.random() * 0.9)
+                    .transition()
+                    .duration(1000 + Math.random() * 3000)
+                    .attr("r", size)
+                    .style("opacity", opacity)
+                    .on("end", blink);
+            }
+            
+            setTimeout(blink, Math.random() * 3000);
+        }
+
+        // 时间控制功能
+        const timeSlider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const playButton = document.getElementById('playButton');
+        const resetButton = document.getElementById('resetButton');
+        const speedOptions = document.querySelectorAll('.speed-option');
+
+        // 时间过滤函数
+        function filterByDate(date) {
+            // 更新节点可见性
+            nodes.forEach(node => {
+                node.visible = node.registerDateObj <= date;
+                const nodeElement = d3.select(`.node:has(circle[data-id="${node.id}"])`);
+                if (nodeElement.size()) {
+                    nodeElement.style("display", node.visible ? "block" : "none");
+                }
+            });
+            
+            // 更新节点DOM元素可见性
+            node.style("display", d => d.visible ? "block" : "none");
+            
+            // 更新连接线可见性
+            links.forEach(link => {
+                const sourceVisible = nodes.find(n => n.id === link.source.id)?.visible;
+                const targetVisible = nodes.find(n => n.id === link.target.id)?.visible;
+                link.visible = sourceVisible && targetVisible && link.dateObj <= date;
+            });
+            
+            // 更新连接线DOM元素可见性
+            link.style("display", d => d.visible ? "block" : "none");
+            
+            // 更新A类信件环形可见性
+            svg.selectAll(".type-A-ring").each(function() {
+                const ringDate = new Date(this.getAttribute("data-date"));
+                const isVisible = ringDate <= date;
+                d3.select(this).style("display", isVisible ? "block" : "none");
+            });
+            
+            // 格式化日期显示
+            const displayDate = date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+            
+            timeDisplay.textContent = displayDate;
+        }
+
+        // 初始化时间滑块
+        timeSlider.addEventListener('input', function() {
+            const percentage = this.value / 100;
+            const timeRange = maxDate - minDate;
+            currentDate = new Date(minDate.getTime() + timeRange * percentage);
+            filterByDate(currentDate);
+        });
+
+        // 播放功能
+        function togglePlay() {
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+                playButton.textContent = "▶ Play";
+            } else {
+                // 如果已经到最大日期，重置到最小日期
+                if (currentDate >= maxDate) {
+                    currentDate = new Date(minDate);
+                    timeSlider.value = 0;
+                }
+                
+                playButton.textContent = "⏸ Pause";
+                
+                playInterval = setInterval(() => {
+                    // 增加当前日期
+                    currentDate = new Date(currentDate.getTime() + 86400000 * playSpeed); // 每帧前进一天×速度
+                    
+                    // 如果超过最大日期，停止播放
+                    if (currentDate >= maxDate) {
+                        currentDate = new Date(maxDate);
+                        clearInterval(playInterval);
+                        playInterval = null;
+                        playButton.textContent = "▶ Play";
+                    }
+                    
+                    // 更新滑块位置
+                    const percentage = (currentDate - minDate) / (maxDate - minDate) * 100;
+                    timeSlider.value = percentage;
+                    
+                    // 应用过滤
+                    filterByDate(currentDate);
+                }, 100); // 每100毫秒更新一次
+            }
+        }
+
+        // 重置功能
+        function resetVisualization() {
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+                playButton.textContent = "▶ Play";
+            }
+            
+            currentDate = new Date(maxDate);
+            timeSlider.value = 100;
+            filterByDate(currentDate);
+        }
+
+        // 初始化事件监听器
+        playButton.addEventListener('click', togglePlay);
+        resetButton.addEventListener('click', resetVisualization);
+
+        // 速度控制
+        speedOptions.forEach(option => {
+            option.addEventListener('click', function() {
+                speedOptions.forEach(opt => opt.classList.remove('active'));
+                this.classList.add('active');
+                playSpeed = parseFloat(this.getAttribute('data-speed'));
+                
+                // 如果正在播放，重启播放以应用新速度
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    togglePlay();
+                }
+            });
+        });
+
+        // 初始化显示所有数据
+        filterByDate(maxDate);
+    </script>
+</body>
+</html>
