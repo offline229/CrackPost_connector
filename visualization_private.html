@@ -1,15 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CrackPost Visualization — Canvas High-Perf</title>
 
     <!-- 如果你需要完全本地化，请下载 d3.v7.min.js 到本目录并将下面这行替换成本地引用（例如 ./libs/d3.v7.min.js） -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
 
     <style>
-        
         @font-face {
             font-family: 'zpix';
             src: url('./font/zpix.ttf') format('truetype');
@@ -29,6 +29,7 @@
             width: 100vw;
             height: 100vh;
         }
+
         #visualization {
             width: 100vw;
             height: 100vh;
@@ -36,6 +37,7 @@
             top: 0;
             left: 0;
         }
+
         /* Canvas 覆盖在该容器内 */
         canvas {
             position: absolute;
@@ -74,6 +76,7 @@
             background-size: 40px 40px;
             pointer-events: none;
         }
+
         h1 {
             position: absolute;
             top: 20px;
@@ -91,6 +94,7 @@
             border-radius: 4px;
             z-index: 100;
         }
+
         .controls {
             position: absolute;
             bottom: 30px;
@@ -107,24 +111,110 @@
             align-items: center;
             z-index: 100;
         }
-        /* 剩余控件样式复用（和原文件一样） */
-        .time-slider { width: 100%; margin: 10px 0; }
-        .slider-container { width: 100%; display:flex; align-items:center; margin-top:5px; }
-        .time-slider { -webkit-appearance:none; appearance:none; width:90%; height:6px; background: rgba(0,120,180,0.3); border-radius:3px; outline:none;}
-        .time-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; background: rgb(0,200,255); border-radius:50%; cursor:pointer; box-shadow:0 0 10px rgba(0,200,255,0.8); }
-        .time-display { color: rgba(0,200,255,0.8); font-size:14px; margin-left:15px; min-width:100px; text-align:left;}
-        .button-container{ display:flex; justify-content:center; margin-top:10px; }
-        .control-button{ background: rgba(0,100,150,0.4); border:1px solid rgba(0,200,255,0.4); color: rgba(0,220,255,0.9); padding:8px 15px; margin:0 5px; border-radius:5px; cursor:pointer; transition:all 0.2s ease; font-family:inherit; outline:none;}
-        .control-button:hover{ background: rgba(0,150,200,0.5); box-shadow: 0 0 15px rgba(0,200,255,0.5);}
-        .control-button:active{ background: rgba(0,180,230,0.6);}
-        .speed-control{ display:flex; align-items:center; margin-top:5px; }
-        .speed-label{ color: rgba(0,200,255,0.8); font-size:14px; margin-right:10px; }
-        .speed-options{ display:flex; }
-        .speed-option{ padding:3px 8px; margin:0 3px; border-radius:3px; color: rgba(0,200,255,0.6); cursor:pointer; font-size:12px; border:1px solid transparent; }
-        .speed-option.active{ border-color: rgba(0,200,255,0.6); color: rgba(0,220,255,0.9); }
 
+        /* 剩余控件样式复用（和原文件一样） */
+        .time-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .slider-container {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .time-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 90%;
+            height: 6px;
+            background: rgba(0, 120, 180, 0.3);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .time-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: rgb(0, 200, 255);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 200, 255, 0.8);
+        }
+
+        .time-display {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-left: 15px;
+            min-width: 100px;
+            text-align: left;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .control-button {
+            background: rgba(0, 100, 150, 0.4);
+            border: 1px solid rgba(0, 200, 255, 0.4);
+            color: rgba(0, 220, 255, 0.9);
+            padding: 8px 15px;
+            margin: 0 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .control-button:hover {
+            background: rgba(0, 150, 200, 0.5);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+        }
+
+        .control-button:active {
+            background: rgba(0, 180, 230, 0.6);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+
+        .speed-label {
+            color: rgba(0, 200, 255, 0.8);
+            font-size: 14px;
+            margin-right: 10px;
+        }
+
+        .speed-options {
+            display: flex;
+        }
+
+        .speed-option {
+            padding: 3px 8px;
+            margin: 0 3px;
+            border-radius: 3px;
+            color: rgba(0, 200, 255, 0.6);
+            cursor: pointer;
+            font-size: 12px;
+            border: 1px solid transparent;
+        }
+
+        .speed-option.active {
+            border-color: rgba(0, 200, 255, 0.6);
+            color: rgba(0, 220, 255, 0.9);
+        }
     </style>
 </head>
+
 <body>
     <div class="grid-background"></div>
     <h1>CrackPost Visualization</h1>
@@ -152,286 +242,303 @@
     </div>
 
 </body>
+
 <script>
 
-// 待办：
-// 拆分init函数
-// 加入初始化进度条
-// 增加附件收纳
-// 增加每日收件数
-// 规范刷新频率
+    // 待办：
+    // 加入初始化进度条
+    // 增加附件收纳
+    // 增加每日收件数
+    // 规范刷新频率
 
-//// ========================= 数据加载 =========================
+    //// ========================= 数据加载 =========================
 
-/**
- * 解析第一行 OC 注册数据，返回 [{name, registerDate}]
- * @param {string} ocLine - 形如 "oc_registerdata name1_2025-01-20,name2_2025-02-02"
- * @returns {Array<{name:string, registerDate:string}>}
- */
-function parseOcRegisterData(ocLine) {
-    const ocMatch = (ocLine || '').match(/oc_registerdata\s+(.*)/);
-    const ocData = [];
-    if (!ocMatch || !ocMatch[1]) return ocData;
-    const ocEntries = ocMatch[1].split(',');
-    ocEntries.forEach(entry => {
-        if (!entry.trim()) return;
-        const [name, date] = entry.split('_');
-        ocData.push({
-            name: (name || '').trim(),
-            registerDate: date ? date.trim() : new Date().toISOString().slice(0, 10)
-        });
-    });
-    return ocData;
-}
-
-/**
- * 解析 TSV 的一行（分隔后列数组），返回 emailObj 的基本字段（不含 wordCount）
- * @param {string[]} cols - TSV 分割后的 6 列
- */
-function parseEmailRow(cols) {
-    return {
-        sendType: (cols[0] || '').trim(),
-        date: (cols[1] || '').trim(),
-        sender: (cols[2] || '').trim(),
-        receiver: (cols[3] || '').trim(),
-        letterType: (cols[4] || '').trim(),
-        path: (cols[5] || '').trim(),
-        ocNameFromContent: null,
-        wordCount: 0
-    };
-}
-
-/**
- * 给出一条存储路径，返回可尝试的 content.txt 候选列表（相对/绝对均支持）
- * @param {string} rawPath
- * @returns {string[]}
- */
-function buildContentCandidatesFromPath(rawPath) {
-    if (!rawPath) return [];
-    const p0 = rawPath.replace(/\\/g, '/').trim();
-    const candidates = [];
-    if (p0.indexOf('/email/') !== -1) {
-        const idx = p0.indexOf('/email/');
-        candidates.push('.' + p0.slice(idx) + '/content.txt');
-        candidates.push('.' + p0.slice(idx) + '/内容.txt');
-        candidates.push('.' + p0.slice(idx) + '/content_utf8.txt');
-        candidates.push('.' + p0.slice(idx) + '.txt');
-    } else {
-        candidates.push(p0 + '/content.txt');
-        candidates.push(p0 + '/内容.txt');
-        candidates.push(p0 + '/content_utf8.txt');
-        candidates.push(p0 + '.txt');
-    }
-    return candidates;
-}
-
-/**
- * 读取候选路径之一的内容并计算字数，写回 emailObj.wordCount，必要时抽取发件人
- * @param {object} emailObj - emailData 中的一条记录（将被就地写 wordCount）
- * @param {string[]} candidates - 备选 content 路径
- * @param {string} sender - TSV 的 sender 字段（用于日志）
- */
-async function fetchContentAndComputeWordCount(emailObj, candidates, sender) {
-    for (const cRaw of candidates) {
-        try {
-            const urlsToTry = [cRaw, encodeURI(cRaw)];
-            let content = null;
-            for (const url of urlsToTry) {
-                try {
-                    const resp = await fetch(url);
-                    if (!resp || !resp.ok) {
-                        console.debug(`[wordcount] fetch 未成功: ${url} status=${resp ? resp.status : 'no-response'}`);
-                        continue;
-                    }
-                    content = await resp.text();
-                    if (!content) {
-                        console.debug(`[wordcount] fetch 读取为空: ${url}`);
-                        continue;
-                    }
-                    break;
-                } catch (e) {
-                    console.debug(`[wordcount] fetch 异常: ${url} err=${e}`);
-                }
-            }
-            if (!content) continue;
-
-            const norm = content
-                .replace(/\u00A0/g, ' ')
-                .replace(/\uFEFF/g, '')
-                .replace(/＝/g,'=')
-                .replace(/：/g,':')
-                .replace(/\r/g,'')
-                .trim();
-
-            // 尝试“----”分隔后的正文，否则回退用“发件人:xxx”后的文本
-            let body = '';
-            const sepMatch = norm.match(/[-]{4,}[\s\r\n]*([\s\S]*)/);
-            if (sepMatch && sepMatch[1]) {
-                body = sepMatch[1];
-            } else {
-                const m = norm.match(/(?:发(?:件|信)人)\s*[=:\uFF1A]?\s*[【\[]?\s*([^\]\n\r】]+?)\s*[】\]]?\s*([\s\S]*)/i);
-                if (m) {
-                    emailObj.ocNameFromContent = (m[1] || '').trim();
-                    body = m[2] || '';
-                } else {
-                    const m2 = norm.match(/发件人[^\n\r]{0,20}[\n\r]+([\s\S]*)/i);
-                    if (m2) body = m2[1] || '';
-                }
-            }
-
-            if (body) {
-                const cleaned = body.replace(/\s+/g, '');
-                emailObj.wordCount = cleaned.length;
-                if (!emailObj.ocNameFromContent) {
-                    const m3 = norm.match(/(?:发(?:件|信)人)\s*[=:\uFF1A]?\s*[【\[]?\s*([^\]\n\r】]+?)\s*[】\]]?/i);
-                    if (m3) emailObj.ocNameFromContent = (m3[1] || '').trim();
-                }
-                if (emailObj.ocNameFromContent && emailObj.ocNameFromContent.includes('@')) {
-                    console.warn(`[wordcount] 发件人解析为邮箱：${emailObj.ocNameFromContent} 路径: ${cRaw} sender字段: ${sender}`);
-                }
-            } else {
-                console.debug(`[wordcount] 未能抽取正文 body: ${cRaw} preview=${norm.slice(0,200).replace(/\n/g,'↵')}`);
-            }
-            // 成功一次后终止
-            break;
-        } catch (e) {
-            console.debug(`[wordcount] 处理候选路径异常: ${cRaw} err=${e}`);
-            continue;
-        }
-    }
-}
-
-/**
- * 加载且只加载一次，从tsv中读取数据并存储为email和oc
- * 加载 TSV 并构建 ocData/emailData；异步读取 content 计算 wordCount
- */
-async function loadEmailData() {
-    try {
-        const response = await fetch('./email/global_result.tsv');
-        const data = await response.text();
-        const lines = data.trim().split('\n');
-
-        // 解析 OC 注册
-        const ocData = parseOcRegisterData(lines[0] || '');
-
-        const emailData = [];
-        const fetchTasks = [];
-
-        for (let i = 2; i < lines.length; i++) {
-            const cols = lines[i].split('\t');
-            if (cols.length < 6) continue;
-
-            const emailObj = parseEmailRow(cols);
-
-            emailData.push(emailObj);
-
-            if (emailObj.path) {
-                const candidates = buildContentCandidatesFromPath(emailObj.path);
-                fetchTasks.push(fetchContentAndComputeWordCount(emailObj, candidates, emailObj.sender));
-            }
-        }
-
-        if (fetchTasks.length) {
-            await Promise.all(fetchTasks);
-            console.debug('[wordcount] 全部 content 读取任务完成');
-        }
-        console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
-        return { ocData, emailData };
-    } catch (error) {
-        console.error('加载邮件数据失败:', error);
-        return { ocData: [], emailData: [] };
-    }
-}
-
-
-//// ========================= 数据解析 =========================
-/**
- * 根据 ocData/emailData 构建 usersData 和 lettersData 的入口
- * 生成用户列表（usersData）
- *  汇总所有 OC 和邮件中出现过的用户，记录每个用户首次出现的时间。 
- *  OC 用户会标记为 isOC: true，普通用户为 isOC: false。
- * 
- * 生成信件列表（lettersData）
- * 按业务规则，把邮件数据拆分为 A/B/C 三类信件，并补充必要的字段（如发件人、收件人、编号、类型、是否 OC 发件等）。
- * 对于 B 信，非 OC 发件人会自动推断最近的 OC 作为收件人。
- */
-function processEmailData(ocData, emailData) {
-    const ocNames = ocData.map(oc => oc.name);
+    // 从tsv文件里读取所有需要的数据
 
     /**
-     * 汇总用户首次出现时间，生成 usersData（包含 OC + 非OC）
+     * 解析第一行 OC 注册数据，返回 [{name, registerDate}]
+     * @param {string} ocLine - 形如 "oc_registerdata name1_2025-01-20,name2_2025-02-02"
+     * @returns {Array<{name:string, registerDate:string}>}
      */
-    function buildUsersData() {
-        const userFirstSeen = new Map();
-        emailData.forEach(email => {
-            if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
-                userFirstSeen.set(email.sender, email.date);
-            }
-            if (email.receiver && (!userFirstSeen.has(email.receiver) || new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
-                userFirstSeen.set(email.receiver, email.date);
-            }
-        });
-
-        const usersData = [];
-        ocData.forEach(oc => {
-            usersData.push({
-                name: oc.name,
-                email: `${oc.name}@example.com`,
-                registerDate: oc.registerDate,
-                isOC: true
+    function parseOcRegisterData(ocLine) {
+        const ocMatch = (ocLine || '').match(/oc_registerdata\s+(.*)/);
+        const ocData = [];
+        if (!ocMatch || !ocMatch[1]) return ocData;
+        const ocEntries = ocMatch[1].split(',');
+        ocEntries.forEach(entry => {
+            if (!entry.trim()) return;
+            const [name, date] = entry.split('_');
+            ocData.push({
+                name: (name || '').trim(),
+                registerDate: date ? date.trim() : new Date().toISOString().slice(0, 10)
             });
         });
-        userFirstSeen.forEach((firstSeenDate, userName) => {
-            if (!ocNames.includes(userName) && userName) {
-                usersData.push({
-                    name: userName,
-                    email: `${userName}@example.com`,
-                    registerDate: firstSeenDate,
-                    isOC: false
-                });
-            }
-        });
-        return usersData;
+        return ocData;
     }
 
     /**
-     * 辅助：找到给定日期之前最近的若干 OC（用于 B 信推断）
+     * 解析 TSV 的一行（分隔后列数组），返回 emailObj 的基本字段（不含 wordCount）
+     * @param {string[]} cols - TSV 分割后的 6 列
      */
-    function findRelevantOCs(date, ocHistory) {
-        const emailDate = new Date(date);
-        const relevantOCs = [];
-        for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
-            const ocDate = new Date(ocHistory[i].date);
-            if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
-                relevantOCs.push(ocHistory[i].sender);
+    function parseEmailRow(cols) {
+        return {
+            sendType: (cols[0] || '').trim(),
+            date: (cols[1] || '').trim(),
+            sender: (cols[2] || '').trim(),
+            receiver: (cols[3] || '').trim(),
+            letterType: (cols[4] || '').trim(),
+            path: (cols[5] || '').trim(),
+            ocNameFromContent: null,
+            wordCount: 0
+        };
+    }
+
+    /**
+     * 给出一条存储路径，返回可尝试的 content.txt 候选列表（相对/绝对均支持）
+     * @param {string} rawPath
+     * @returns {string[]}
+     */
+    function buildContentCandidatesFromPath(rawPath) {
+        if (!rawPath) return [];
+        const p0 = rawPath.replace(/\\/g, '/').trim();
+        let p = p0;
+        if (p.indexOf('/email/') !== -1) {
+            const idx = p.indexOf('/email/');
+            p = '.' + p.slice(idx);
+        }
+        p = p.replace(/\/+$/, '');
+
+        // ✅ 关键：在拼接路径之前就对 # 进行编码
+        p = p.replace(/#/g, '%23');
+
+        const candidates = [];
+        const contentPath = `${p}/content.txt`;
+        candidates.push(contentPath);
+        
+        return [...new Set(candidates)];
+    }
+
+    /**
+     * 读取候选路径之一的内容并计算字数，写回 emailObj.wordCount，必要时抽取发件人
+     * @param {object} emailObj - emailData 中的一条记录（将被就地写 wordCount）
+     * @param {string[]} candidates - 备选 content 路径
+     * @param {string} sender - TSV 的 sender 字段（用于日志）
+     */
+    async function fetchContentAndComputeWordCount(emailObj, candidates, sender) {
+        for (const cRaw of candidates) {
+            try {
+                
+                const urlsToTry = [cRaw, encodeURI(cRaw)];
+                let content = null;
+                for (const url of urlsToTry) {
+                    try {
+                        const resp = await fetch(url);
+                        if (!resp || !resp.ok) {
+                            console.debug(`[wordcount] fetch 未成功: ${url} status=${resp ? resp.status : 'no-response'}`);
+                            continue;
+                        }
+                        content = await resp.text();
+                        if (!content) {
+                            console.debug(`[wordcount] fetch 读取为空: ${url}`);
+                            continue;
+                        }
+                        break;
+                    } catch (e) {
+                        console.debug(`[wordcount] fetch 异常: ${url} err=${e}`);
+                    }
+                }
+                if (!content) continue;
+
+                const norm = content
+                    .replace(/\u00A0/g, ' ')
+                    .replace(/\uFEFF/g, '')
+                    .replace(/＝/g, '=')
+                    .replace(/：/g, ':')
+                    .replace(/\r/g, '')
+                    .trim();
+
+                // 尝试“----”分隔后的正文，否则回退用“发件人:xxx”后的文本
+                let body = '';
+                const sepMatch = norm.match(/[-]{4,}[\s\r\n]*([\s\S]*)/);
+                if (sepMatch && sepMatch[1]) {
+                    body = sepMatch[1];
+                } else {
+                    const m = norm.match(/(?:发(?:件|信)人)\s*[=:\uFF1A]?\s*[【\[]?\s*([^\]\n\r】]+?)\s*[】\]]?\s*([\s\S]*)/i);
+                    if (m) {
+                        emailObj.ocNameFromContent = (m[1] || '').trim();
+                        body = m[2] || '';
+                    } else {
+                        const m2 = norm.match(/发件人[^\n\r]{0,20}[\n\r]+([\s\S]*)/i);
+                        if (m2) body = m2[1] || '';
+                    }
+                }
+
+                if (body) {
+                    const cleaned = body.replace(/\s+/g, '');
+                    emailObj.wordCount = cleaned.length;
+                    if (!emailObj.ocNameFromContent) {
+                        const m3 = norm.match(/(?:发(?:件|信)人)\s*[=:\uFF1A]?\s*[【\[]?\s*([^\]\n\r】]+?)\s*[】\]]?/i);
+                        if (m3) emailObj.ocNameFromContent = (m3[1] || '').trim();
+                    }
+                    if (emailObj.ocNameFromContent && emailObj.ocNameFromContent.includes('@')) {
+                        console.warn(`[wordcount] 发件人解析为邮箱：${emailObj.ocNameFromContent} 路径: ${cRaw} sender字段: ${sender}`);
+                    }
+                } else {
+                    console.debug(`[wordcount] 未能抽取正文 body: ${cRaw} preview=${norm.slice(0, 200).replace(/\n/g, '↵')}`);
+                }
+                // 成功一次后终止
+                break;
+            } catch (e) {
+                console.debug(`[wordcount] 处理候选路径异常: ${cRaw} err=${e}`);
+                continue;
             }
         }
-        return relevantOCs;
     }
 
     /**
-     * 从 emailData 构建 lettersData（A/B/C 三类），按现有业务规则
+     * 加载且只加载一次，从tsv中读取数据并存储为email和oc
+     * 加载 TSV 并构建 ocData/emailData；异步读取 content 计算 wordCount
      */
-    function buildLettersData() {
-        const lettersData = [];
-        const ocSentHistory = [];
-        emailData.forEach(email => {
-            if (ocNames.includes(email.sender)) {
-                ocSentHistory.push({ sender: email.sender, date: email.date });
+    async function loadEmailData() {
+        try {
+            const response = await fetch('./email/global_result.tsv');
+            const data = await response.text();
+            const lines = data.trim().split('\n');
+
+            // 解析 OC 注册
+            const ocData = parseOcRegisterData(lines[0] || '');
+
+            const emailData = [];
+            const fetchTasks = [];
+
+            for (let i = 2; i < lines.length; i++) {
+                const cols = lines[i].split('\t');
+                if (cols.length < 6) continue;
+
+                const emailObj = parseEmailRow(cols);
+
+                emailData.push(emailObj);
+
+                if (emailObj.path) {
+                    const candidates = buildContentCandidatesFromPath(emailObj.path);
+                    fetchTasks.push(fetchContentAndComputeWordCount(emailObj, candidates, emailObj.sender));
+                }
             }
-        });
-        ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-        emailData.forEach(email => {
-            const letterTypeMatch = (email.letterType || '').match(/^([ABC])([^\s]*)/i);
-            if (!letterTypeMatch) return;
-            const letterType = letterTypeMatch[1].toUpperCase();
-            const letterNumber = letterTypeMatch[0];
-            const isOCSender = ocNames.includes(email.sender);
+            if (fetchTasks.length) {
+                await Promise.all(fetchTasks);
+                console.debug('[wordcount] 全部 content 读取任务完成');
+            }
+            console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
+            return { ocData, emailData };
+        } catch (error) {
+            console.error('加载邮件数据失败:', error);
+            return { ocData: [], emailData: [] };
+        }
+    }
 
-            if (isOCSender) {
-                if (letterType === 'A') {
-                    if ((email.sendType || '').trim() === '收') {
+
+    //// ========================= 数据解析 =========================
+    /**
+     * 根据 ocData/emailData 构建 usersData 和 lettersData 的入口
+     * 生成用户列表（usersData）
+     *  汇总所有 OC 和邮件中出现过的用户，记录每个用户首次出现的时间。 
+     *  OC 用户会标记为 isOC: true，普通用户为 isOC: false。
+     * 
+     * 生成信件列表（lettersData）
+     * 按业务规则，把邮件数据拆分为 A/B/C 三类信件，并补充必要的字段（如发件人、收件人、编号、类型、是否 OC 发件等）。
+     * 对于 B 信，非 OC 发件人会自动推断最近的 OC 作为收件人。
+     */
+    function processEmailData(ocData, emailData) {
+        const ocNames = ocData.map(oc => oc.name);
+
+        /**
+         * 汇总用户首次出现时间，生成 usersData（包含 OC + 非OC）
+         */
+        function buildUsersData() {
+            const userFirstSeen = new Map();
+            emailData.forEach(email => {
+                if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
+                    userFirstSeen.set(email.sender, email.date);
+                }
+                if (email.receiver && (!userFirstSeen.has(email.receiver) || new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
+                    userFirstSeen.set(email.receiver, email.date);
+                }
+            });
+
+            const usersData = [];
+            ocData.forEach(oc => {
+                usersData.push({
+                    name: oc.name,
+                    email: `${oc.name}@example.com`,
+                    registerDate: oc.registerDate,
+                    isOC: true
+                });
+            });
+            userFirstSeen.forEach((firstSeenDate, userName) => {
+                if (!ocNames.includes(userName) && userName) {
+                    usersData.push({
+                        name: userName,
+                        email: `${userName}@example.com`,
+                        registerDate: firstSeenDate,
+                        isOC: false
+                    });
+                }
+            });
+            return usersData;
+        }
+
+        /**
+         * 辅助：找到给定日期之前最近的若干 OC（用于 B 信推断）
+         */
+        function findRelevantOCs(date, ocHistory) {
+            const emailDate = new Date(date);
+            const relevantOCs = [];
+            for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
+                const ocDate = new Date(ocHistory[i].date);
+                if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
+                    relevantOCs.push(ocHistory[i].sender);
+                }
+            }
+            return relevantOCs;
+        }
+
+        /**
+         * 从 emailData 构建 lettersData（A/B/C 三类），按现有业务规则
+         */
+        function buildLettersData() {
+            const lettersData = [];
+            const ocSentHistory = [];
+            emailData.forEach(email => {
+                if (ocNames.includes(email.sender)) {
+                    ocSentHistory.push({ sender: email.sender, date: email.date });
+                }
+            });
+            ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            emailData.forEach(email => {
+                const letterTypeMatch = (email.letterType || '').match(/^([ABC])([^\s]*)/i);
+                if (!letterTypeMatch) return;
+                const letterType = letterTypeMatch[1].toUpperCase();
+                const letterNumber = letterTypeMatch[0];
+                const isOCSender = ocNames.includes(email.sender);
+
+                if (isOCSender) {
+                    if (letterType === 'A') {
+                        if ((email.sendType || '').trim() === '收') {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: [],
+                                isOCSender: true,
+                                path: email.path || ''
+                            });
+                        } else {
+                            return;
+                        }
+                    } else if (letterType === 'B') {
                         lettersData.push({
                             sender: email.sender,
                             type: letterType,
@@ -439,539 +546,220 @@ function processEmailData(ocData, emailData) {
                             date: email.date,
                             receivers: [],
                             isOCSender: true,
+                            isBroadcast: true,
                             path: email.path || ''
                         });
-                    } else {
-                        return;
+                    } else if (letterType === 'C') {
+                        if (email.receiver) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: [email.receiver],
+                                isOCSender: true,
+                                path: email.path || ''
+                            });
+                        }
                     }
-                } else if (letterType === 'B') {
-                    lettersData.push({
-                        sender: email.sender,
-                        type: letterType,
-                        number: letterNumber,
-                        date: email.date,
-                        receivers: [],
-                        isOCSender: true,
-                        isBroadcast: true,
-                        path: email.path || ''
-                    });
-                } else if (letterType === 'C') {
-                    if (email.receiver) {
+                } else {
+                    const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
+                    if (letterType === 'A') {
                         lettersData.push({
                             sender: email.sender,
                             type: letterType,
                             number: letterNumber,
                             date: email.date,
-                            receivers: [email.receiver],
-                            isOCSender: true,
-                            path: email.path || ''
-                        });
-                    }
-                }
-            } else {
-                const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
-                if (letterType === 'A') {
-                    lettersData.push({
-                        sender: email.sender,
-                        type: letterType,
-                        number: letterNumber,
-                        date: email.date,
-                        receivers: [],
-                        isOCSender: false,
-                        path: email.path || ''
-                    });
-                } else if (letterType === 'B') {
-                    if (relevantOCs.length > 0) {
-                        lettersData.push({
-                            sender: email.sender,
-                            type: letterType,
-                            number: letterNumber,
-                            date: email.date,
-                            receivers: relevantOCs,
+                            receivers: [],
                             isOCSender: false,
                             path: email.path || ''
                         });
-                    }
-                } else if (letterType === 'C') {
-                    if (email.receiver) {
-                        lettersData.push({
-                            sender: email.sender,
-                            type: letterType,
-                            number: letterNumber,
-                            date: email.date,
-                            receivers: [email.receiver],
-                            isOCSender: false,
-                            path: email.path || ''
-                        });
+                    } else if (letterType === 'B') {
+                        if (relevantOCs.length > 0) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: relevantOCs,
+                                isOCSender: false,
+                                path: email.path || ''
+                            });
+                        }
+                    } else if (letterType === 'C') {
+                        if (email.receiver) {
+                            lettersData.push({
+                                sender: email.sender,
+                                type: letterType,
+                                number: letterNumber,
+                                date: email.date,
+                                receivers: [email.receiver],
+                                isOCSender: false,
+                                path: email.path || ''
+                            });
+                        }
                     }
                 }
-            }
-        });
-        return lettersData;
+            });
+            return lettersData;
+        }
+
+        const usersData = buildUsersData();
+        const lettersData = buildLettersData();
+        return { usersData, lettersData };
     }
 
-    const usersData = buildUsersData();
-    const lettersData = buildLettersData();
-    return { usersData, lettersData };
-}
 
+    //// ========================= 数据呈现 =========================
 
-//// ========================= 数据呈现 =========================
-
-/**
- * 拆分：数据结构构建
- * 输入 ocData, emailData，输出 usersData, lettersData
- */
-function buildVisualizationData(ocData, emailData) {
-    let usersData = [], lettersData = [];
-    if ((ocData && ocData.length) || (emailData && emailData.length)) {
-        const processed = processEmailData(ocData, emailData);
-        usersData = processed.usersData;
-        lettersData = processed.lettersData;
-    } else {
-        // fallback mock (keeps same structure)
-        usersData = [
-            { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
-            { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
-            { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
-            { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
-            { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
-        ];
-        lettersData = [
-            { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1","OC2"], isOCSender: false },
-            { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
-            { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
-            { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
-            { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
-        ];
-    }
-    return { usersData, lettersData };
-}
-
-/**
- * 拆分：计算时间范围与初始状态
- * 输入 usersData, lettersData
- * 输出 { minDate, maxDate, currentDate, playInterval, playSpeed }
- */
-function computeTimeState(usersData, lettersData) {
-    const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
-    const minDate = new Date(allDates[0]);
-    const maxDate = new Date(allDates[allDates.length - 1]);
-    let currentDate = new Date(minDate); // start from min
-    let playInterval = null;
-    let playSpeed = 1;
-    return { minDate, maxDate, currentDate, playInterval, playSpeed };
-}
-
-
-/**
- * 拆分：画布与容器初始化
- * 返回 { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height }
- */
-function setupCanvasAndTooltip() {
-    const container = document.getElementById('visualization');
-    container.style.position = 'relative';
-    const canvas = document.createElement('canvas');
-    canvas.style.position = 'absolute';
-    canvas.style.left = '0';
-    canvas.style.top = '0';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    const DPR = window.devicePixelRatio || 1;
-    container.appendChild(canvas);
-    const ctx = canvas.getContext('2d', { alpha: true });
-
-    // tooltip DOM
-    const tooltip = document.querySelector('.tooltip');
-    if (tooltip) {
-        tooltip.style.position = 'absolute';
-        tooltip.style.pointerEvents = 'none';
-        tooltip.style.display = 'none';
-        tooltip.style.background = 'rgba(20,20,20,0.9)';
-        tooltip.style.color = '#fff';
-        tooltip.style.padding = '8px 10px';
-        tooltip.style.borderRadius = '6px';
-        tooltip.style.fontSize = '13px';
-        tooltip.style.lineHeight = '1.4';
+    /**
+     * 拆分：数据结构构建
+     * 输入 ocData, emailData，输出 usersData, lettersData
+     */
+    function buildVisualizationData(ocData, emailData) {
+        let usersData = [], lettersData = [];
+        if ((ocData && ocData.length) || (emailData && emailData.length)) {
+            const processed = processEmailData(ocData, emailData);
+            usersData = processed.usersData;
+            lettersData = processed.lettersData;
+        } else {
+            // fallback mock (keeps same structure)
+            usersData = [
+                { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
+                { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
+                { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
+                { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
+                { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
+            ];
+            lettersData = [
+                { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1", "OC2"], isOCSender: false },
+                { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
+                { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
+                { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
+                { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
+            ];
+        }
+        return { usersData, lettersData };
     }
 
-    // dimensions and time scale (will be recalculated on resize)
-    let width = window.innerWidth;
-    let height = window.innerHeight;
-    function resizeCanvas() {
-        width = Math.max(100, container.clientWidth || window.innerWidth);
-        height = Math.max(100, container.clientHeight || window.innerHeight);
-        canvas.width = Math.max(1, Math.floor(width * DPR));
-        canvas.height = Math.max(1, Math.floor(height * DPR));
-        canvas.style.width = width + 'px';
-        canvas.style.height = height + 'px';
+    /**
+     * 拆分：计算时间范围与初始状态
+     * 输入 usersData, lettersData
+     * 输出 { minDate, maxDate, currentDate, playInterval, playSpeed }
+     */
+    function computeTimeState(usersData, lettersData) {
+        const allDates = [...usersData.map(u => u.registerDate), ...lettersData.map(l => l.date)].sort();
+        const minDate = new Date(allDates[0]);
+        const maxDate = new Date(allDates[allDates.length - 1]);
+        let currentDate = new Date(minDate); // start from min
+        let playInterval = null;
+        let playSpeed = 1;
+        return { minDate, maxDate, currentDate, playInterval, playSpeed };
     }
-    resizeCanvas();
-
-    return { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height };
-}
-
-async function initVisualization() {
-    // hover state variables (declare early to avoid ReferenceError)
-    let hoveredLink = null;
-    let hoveredNode = null;
-    let hoveredRing = null;
-
-    // load and process
-    const { ocData, emailData } = await loadEmailData();
-    const { usersData, lettersData } = buildVisualizationData(ocData, emailData);
-
-    // compute date range
-    let { minDate, maxDate, currentDate, playInterval, playSpeed } = computeTimeState(usersData, lettersData);
-    
-    // canvas setup
-    const { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height } = setupCanvasAndTooltip();
 
 
-    window.addEventListener('resize', () => {
+    /**
+     * 拆分：画布与容器初始化
+     * 返回 { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height }
+     */
+    function setupCanvasAndTooltip() {
+        const container = document.getElementById('visualization');
+        container.style.position = 'relative';
+        const canvas = document.createElement('canvas');
+        canvas.style.position = 'absolute';
+        canvas.style.left = '0';
+        canvas.style.top = '0';
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        const DPR = window.devicePixelRatio || 1;
+        container.appendChild(canvas);
+        const ctx = canvas.getContext('2d', { alpha: true });
+
+        // tooltip DOM
+        const tooltip = document.querySelector('.tooltip');
+        if (tooltip) {
+            tooltip.style.position = 'absolute';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.display = 'none';
+            tooltip.style.background = 'rgba(20,20,20,0.9)';
+            tooltip.style.color = '#fff';
+            tooltip.style.padding = '8px 10px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.fontSize = '13px';
+            tooltip.style.lineHeight = '1.4';
+        }
+
+        // dimensions and time scale (will be recalculated on resize)
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        function resizeCanvas() {
+            width = Math.max(100, container.clientWidth || window.innerWidth);
+            height = Math.max(100, container.clientHeight || window.innerHeight);
+            canvas.width = Math.max(1, Math.floor(width * DPR));
+            canvas.height = Math.max(1, Math.floor(height * DPR));
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+        }
         resizeCanvas();
-        // 保持 timeScale 的像素范围与容器一致（左右 10% margin）
-        if (typeof timeScale !== 'undefined' && timeScale.range) {
-            timeScale.range([width * 0.1, width * 0.9]);
-        }
-        // 重新基于新窗口尺寸计算一次初始布局并固定位置
-        computeInitialLayout(300);
-        // 注意：不要在 resize 后频繁调用 computeFit()，computeInitialLayout 内已调用一次
-    });
 
-// ...existing code...
-
-    // timeScale for X layout (map register dates to X)
-    const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
-    const timeScale = d3.scaleTime()
-        .domain(dateExtent)
-        .range([width * 0.1, width * 0.9]);
-
-    // deterministic hash -> used to place nodes vertically in a narrow band
-    function nameHashToNormalized(name) {
-        let h = 2166136261 >>> 0;
-        for (let i = 0; i < name.length; i++) {
-            h ^= name.charCodeAt(i);
-            h = Math.imul(h, 16777619) >>> 0;
-        }
-        return (h % 1000) / 1000; // 0..1
+        return { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height };
     }
 
-    // build nodes - compute x from time, compute y deterministically but constrained to a narrow vertical band
-// ...existing code...
-// ...existing code...
-    const nodes = usersData.map((user, i) => {
-        const registerDate = new Date(user.registerDate);
-        const x = timeScale(registerDate);
-        // compress vertical distribution into center band: +/- 9% of height by default
-        const band = Math.max(40, height * 0.18); // ensure at least some pixels
-        const normalized = nameHashToNormalized(user.name);
-        const yCenter = height * 0.5;
-        const y = yCenter + (normalized - 0.5) * band;
-        return {
-            id: user.name,
-            name: user.name,
-            email: user.email,
-            registerDate: user.registerDate,
-            registerDateObj: registerDate,
-            x: x,
-            y: y,
-            fx: null,
-            fy: null,
-            type: "user",
-            isOC: !!user.isOC,
-            visible: false,
-            r: user.isOC ? 13 : 8,
-            // counters (will be filled by filterByDate)
-            sentCount: 0,
-            recvCount: 0,
-            // 新增字数统计（随时间轴动态累加）
-            sentWords: 0,
-            recvWords: 0
+
+
+    /**
+     * 一次性布局计算（运行 force simulation 并固定节点）
+     */
+    function computeInitialLayout(nodes, links, timeScale, view, width, height, ticks = 300) {
+        const FORCE_PARAMS = {
+            charge: -30,
+            linkDistance: 80,
+            collideOC: 12,
+            collideUser: 6,
+            xStrength: 0.6,
+            yStrength: 0.05
         };
-    });
-    const nodeById = {};
-    nodes.forEach(n => nodeById[n.id] = n);
-    // 新增：名字归一化 + 映射与回退查找
-    function normName(s) {
-        if (!s) return '';
-        return String(s)
-            .replace(/[\u00A0\u200B-\u200D\u202F\u3000]/g, '') // 不可见空白/全角空格
-            .replace(/\s+/g, '')                               // 所有空格
-            .trim();
-    }
-    const nodeByNormName = {};
-    nodes.forEach(n => { nodeByNormName[normName(n.id)] = n; });
 
-    function getNodeByName(name) {
-        return nodeById[name] || nodeByNormName[normName(name)];
-    }
-
-    // per-node jitter params: 不改变 n.x/n.y（位置固定），仅用于绘制偏移
-    const nodeJitter = {};
-    nodes.forEach((n, i) => {
-        // 更大的震幅，更慢的速度 -> 视觉更活但不快
-        nodeJitter[n.id] = {
-            ampX: (n.isOC ? 1.6 : 2.4) + Math.random() * 1.8, // 增大 X 摆动幅度 px
-            ampY: (n.isOC ? 1.0 : 1.6) + Math.random() * 1.4, // 增大 Y 摆动幅度 px
-            phase: Math.random() * Math.PI * 2,
-            speed: 0.0005 + Math.random() * 0.0012 // 更慢的震动速度
-        };
-        // initialize temporary offsets
-        n._dx = 0;
-        n._dy = 0;
-    });
-// ...existing code...
-
-    // build links same as before (links are purely visual now; they won't pull nodes)
-    const connectionCounts = {};
-    lettersData.forEach(letter => {
-        (letter.receivers || []).forEach(receiver => {
-            const key = letter.sender < receiver ? `${letter.sender}|${receiver}` : `${receiver}|${letter.sender}`;
-            if (!connectionCounts[key]) connectionCounts[key] = { count: 0, connections: [] };
-            connectionCounts[key].count++;
-            connectionCounts[key].connections.push({
-                source: letter.sender,
-                target: receiver,
-                type: letter.type,
-                number: letter.number,
-                date: letter.date,
-                dateObj: new Date(letter.date),
-                isOCSender: letter.isOCSender || false,
-                rawLetter: letter
-            });
-        });
-    });
-
-    const links = [];
-    Object.keys(connectionCounts).forEach(key => {
-        const connInfo = connectionCounts[key];
-        const conns = connInfo.connections;
-        const n = conns.length;
-        // 按日期升序把旧邮件排到 rank=0，依次为新 -> 更大的 rank
-        const order = conns
-            .map((c, i) => ({ idx: i, date: new Date(c.date) }))
-            .sort((a, b) => a.date - b.date)
-            .map(x => x.idx);
-        const idxToRank = {};
-        order.forEach((origIdx, rank) => { idxToRank[origIdx] = rank; });
-        const center = (n - 1) / 2;
-        const SPACING = 3; // 控制弧线间距，可调
-        function rankToPos(rank) {
-            // rank=0 -> center (最内侧)，rank=1 -> center+1，rank=2 -> center-1，rank=3 -> center+2 ...
-            if (rank === 0) return center;
-            const k = Math.ceil(rank / 2);
-            return center + (rank % 2 === 1 ? k : -k);
-        }
-        conns.forEach((conn, idx) => {
-            const sourceNode = nodeById[conn.source];
-            const targetNode = nodeById[conn.target];
-            if (!sourceNode || !targetNode) return;
-            const rank = (typeof idxToRank[idx] !== 'undefined') ? idxToRank[idx] : idx;
-            const pos = rankToPos(rank);
-            const offset = n > 1 ? (pos - center) * SPACING : 0;
-            links.push({
-                source: sourceNode,
-                target: targetNode,
-                type: conn.type,
-                number: conn.number,
-                date: conn.date,
-                dateObj: conn.dateObj,
-                isOCSender: conn.isOCSender,
-                offset: offset,
-                totalConnections: n,
-                visible: false,
-                rawLetter: conn.rawLetter
-            });
-        });
-     });
-
-// ...existing code...
-    // A-rings metadata — 从 emailData 构建，匹配 A 或 A* + 数字；同一 sender+数字仅保留最早一次
-    const senderRings = {};
-    const aEarliest = new Map(); // key: `${normSender}|${digits}` -> rec
-
-    emailData.forEach(e => {
-        const raw = (e.letterType || '').trim();
-        // 兼容：A155 / A*155 / A＊155 / A-155 / a 155 等（忽略大小写）
-        const m = raw.match(/^[Aa][＊*]?\s*[-_·]?\s*(\d+)/);
-        if (!m) return;
-        const digits = m[1];
-        const senderRaw = (e.sender || '').trim();
-        if (!senderRaw) return;
-        const normSender = normName(senderRaw);
-        const d = new Date(e.date);
-        if (isNaN(d)) return;
-
-        const key = `${normSender}|${digits}`;
-        const prev = aEarliest.get(key);
-        if (!prev || d < prev.dateObj) {
-            aEarliest.set(key, {
-                senderRaw,
-                normSender,
-                digits,
-                dateObj: d,
-                displayNumber: raw,
-                date: e.date,
-                path: e.path || ''
-            });
-        }
-    });
-
-    // materialize senderRings（渲染时用原始 sender 但找节点用 getNodeByName）
-    aEarliest.forEach(v => {
-        const sKey = v.senderRaw;
-        if (!senderRings[sKey]) senderRings[sKey] = [];
-        senderRings[sKey].push({
-            dateObj: v.dateObj,
-            letter: {
-                sender: sKey,
-                type: 'A',
-                number: v.displayNumber,
-                date: v.date,
-                receivers: [],
-                path: v.path
-            }
-        });
-    });
-    Object.keys(senderRings).forEach(s => {
-        senderRings[s].sort((a, b) => a.dateObj - b.dateObj);
-    });
-// ...existing code...
-    Object.keys(senderRings).forEach(s => {
-        senderRings[s].sort((a, b) => a.dateObj - b.dateObj);
-    });
-
-    // particles pool (unchanged)
-    const particles = [];
-(function initParticles(){
-    const MAX_PARTICLES = 50; // 可调：更大则更多光点
-    // 收集所有可用的 link 索引（只针对 B/C 通讯线）
-    const eligible = [];
-    for (let i = 0; i < links.length; i++) {
-        if (links[i].type === 'B' || links[i].type === 'C') eligible.push(i);
-    }
-    if (eligible.length === 0) return;
-    for (let i = 0; i < MAX_PARTICLES; i++) {
-        const li = eligible[Math.floor(Math.random() * eligible.length)];
-        const l = links[li];
-        particles.push({
-            linkIndex: li,
-            position: Math.random(),
-            speed: 0.002 + Math.random() * 0.018, // 更宽的速度分布
-            size: (l && l.type === 'C') ? (2.6 + Math.random()*1.2) : (1.6 + Math.random()*1.2),
-            color: (l && l.isOCSender) ? 'rgba(80,170,255,0.75)' : (l && l.type === 'B' ? 'rgba(255,120,255,0.98)' : 'rgba(255,220,80,0.98)')
-        });
-    }
-})();
-    
-
-    // pulse rings per node (unchanged)
-    const pulseRings = nodes.map((n, idx) => ({
-        ownerId: n.id,
-        minRadius: n.isOC ? 13 : 10,
-        maxRadius: n.isOC ? 33 : 30,
-        currentRadius: n.isOC ? 13 : 10,
-        growing: true,
-        opacity: 0.12,
-        speed: 0.3 + Math.random() * 0.9,
-        colorH: n.isOC ? (120 + idx * 10 % 360) : (180 + idx * 5 % 360)
-    }));
-
-    // star background
-    canvas._stars = [];
-    for (let i = 0; i < 60; i++) {
-        canvas._stars.push({
-            x: Math.random() * width,
-            y: Math.random() * height,
-            r: Math.random() * 1.5 + 0.3,
-            alpha: Math.random() * 0.5 + 0.2
-        });
-    }
-
-    // Force params (used only in initial temp layout)
-    const FORCE_PARAMS = {
-        charge: -30,
-        linkDistance: 80,
-        collideOC: 12,
-        collideUser: 6,
-        xStrength: 0.6,
-        yStrength: 0.05 // low y strength - we already positioned y deterministically
-    };
-
-    function getDisplayPos(n) {
-        return { x: n.x + (n._dx || 0), y: n.y + (n._dy || 0) };
-    }
-
-    // 为每个节点初始化速度和惯性标记（不影响已有字段）
-    nodes.forEach(n => {
-        n.vx = 0;
-        n.vy = 0;
-        n._inertiaActive = false;
-    });
-
-    // ---------------------------
-    // INITIAL LAYOUT helper（替代原有一次性 tempSim 区块）：
-    // - 在初始化或 resize 时运行一次临时 force 布局以稳定位置，然后把节点固定（fx/fy）
-    // - 之后播放仅改变 visible，不再触发布局变化
-    let view = { scale: 1, tx: 0, ty: 0 };
-    // ---------------------------
-    let layoutFixed = false;
-
-    function computeInitialLayout(ticks = 300) {
-        // ensure timeScale range is up to date (resize handler 保证 timeScale.range 已同步)
         const tempLinks = links.map(l => ({ source: l.source.id, target: l.target.id }));
         const tempSim = d3.forceSimulation(nodes)
             .force("charge", d3.forceManyBody().strength(FORCE_PARAMS.charge))
             .force("x", d3.forceX(d => timeScale(new Date(d.registerDate))).strength(FORCE_PARAMS.xStrength))
             .force("y", d3.forceY(d => d.y).strength(FORCE_PARAMS.yStrength))
             .force("collision", d3.forceCollide().radius(d => d.isOC ? FORCE_PARAMS.collideOC : FORCE_PARAMS.collideUser))
-            // link strength 0 — 保留视觉 links 数据结构但不牵拉节点
             .force("link", d3.forceLink(tempLinks).id(d => d.id).distance(FORCE_PARAMS.linkDistance).strength(0));
 
         for (let i = 0; i < ticks; i++) tempSim.tick();
         tempSim.stop();
 
-        // freeze positions so playback won't move nodes
+        // 固定所有节点位置
         nodes.forEach(n => {
             n.fx = n.x;
             n.fy = n.y;
+            n.vx = 0;
+            n.vy = 0;
+            n._inertiaActive = false;
         });
 
-        // compute view fit once (基于固定位置)
-        // 问题修复：在计算 fit 时临时使用所有节点（不受当前时间线 visible 限制）
+        // 计算初始视图适配
         const prevVisible = nodes.map(n => n.visible);
         try {
             nodes.forEach(n => n.visible = true);
-            computeFit();
+            view = computeFitInternal(nodes, width, height, view);
         } finally {
-            // 恢复原来的 visible 状态（播放仍然由 filterByDate 控制）
             nodes.forEach((n, i) => n.visible = prevVisible[i]);
         }
 
-        layoutFixed = true;
-        // allow GC for tempSim
+        return view;
     }
 
-    // We do not keep a running simulation that modifies node positions.
-    // If any code references simulation, guard those calls with `if (simulation) { ... }`.
-    let simulation = null; // intentionally null: no ongoing force layout
-
-    // run initial layout now
-    computeInitialLayout(300);
-
-// ...existing code...
-
-    // VIEW transform
-
-    function computeFit(marginRatio = 0.08) {
-        // pick nodes that are visible (or all)
+    /**
+     * 计算视图适配（内部函数，供 computeInitialLayout 和 computeFit 调用）
+     */
+    function computeFitInternal(nodes, width, height, view, marginRatio = 0.08) {
         const visibleNodes = nodes.filter(n => n.visible !== false);
         const used = visibleNodes.length ? visibleNodes : nodes;
-        if (!used.length) {
-            view = { scale: 1, tx: 0, ty: 0 };
-            return;
-        }
+        if (!used.length) return { scale: 1, tx: 0, ty: 0 };
+
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         used.forEach(n => {
             if (n.x < minX) minX = n.x;
@@ -979,74 +767,658 @@ async function initVisualization() {
             if (n.x > maxX) maxX = n.x;
             if (n.y > maxY) maxY = n.y;
         });
+
         const bw = Math.max(1, maxX - minX);
         const bh = Math.max(1, maxY - minY);
         const marginW = width * marginRatio;
         const marginH = height * marginRatio;
         const availableW = Math.max(1, width - marginW * 2);
         const availableH = Math.max(1, height - marginH * 2);
-        let scaleX = availableW / bw;
-        let scaleY = availableH / bh;
-        // prefer X compression (we want Y to be compact), so choose a scale that favors width fit
-        let scale = Math.min(scaleX, scaleY);
+
+        let scale = Math.min(availableW / bw, availableH / bh);
         scale = Math.min(scale, 1.5);
         scale = Math.max(0.02, scale);
+
         const bboxCx = (minX + maxX) / 2;
         const bboxCy = (minY + maxY) / 2;
         const tx = width / 2 - bboxCx * scale;
         const ty = height / 2 - bboxCy * scale;
-        view = { scale, tx, ty };
+
+        return { scale, tx, ty };
     }
 
-    // initial fit
-    computeFit();
+    /**
+     * 绑定所有交互事件
+     */
+    function setupInteractions(state) {
+        const { canvas, nodes, links, view, tooltip, senderRings, nodeById,
+            getDisplayPos, computeQuadraticControl, distancePointToQuadratic,
+            width, height, dateState } = state;
 
-    // helper: quadratic control same as before
-    function computeQuadraticControl(sourceX, sourceY, targetX, targetY, total, offset) {
-        // 减小弧度幅度，并使多条并列弧线在两侧交替分布（而不是都偏向同一侧）
-        const center = (total - 1) / 2;
-        const idx = offset ? (offset / 3 + center) : 0;
-        const delta = idx - center;
-        // 曲率基准值（调小以减小弧度）
-        const BASE_CURVE = 20;
-        // 根据与中心的距离放大曲率，但使用交替符号实现两侧分布
-        const magnitude = Math.abs(delta) + 0.5; // +0.5 保证最小偏移
-        const sign = (Math.round(Math.abs(delta)) % 2 === 0) ? 1 : -1;
-        const curve = BASE_CURVE * magnitude * sign;
+        let draggingNode = null;
+        let dragOffset = { x: 0, y: 0 };
+        let panning = false;
+        let panStart = null;
+        let hoveredLink = null;
+        let hoveredNode = null;
+        let hoveredRing = null;
+        let expandedItem = null;
 
-        const dx = targetX - sourceX;
-        const dy = targetY - sourceY;
-        const len = Math.hypot(dx, dy) || 1;
-        const cx = (sourceX + targetX) / 2 + curve * (dy) / len;
-        const cy = (sourceY + targetY) / 2 - curve * (dx) / len;
-        return { cx, cy };
-    }
-
-    // distance from point to quadratic bezier
-    function distancePointToQuadratic(px, py, x0, y0, cx, cy, x1, y1, steps = 28) {
-        let minDist = Infinity;
-        for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const ix = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
-            const iy = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * cy + t * t * y1;
-            const d = Math.hypot(px - ix, py - iy);
-            if (d < minDist) minDist = d;
+        // 客户端坐标 -> 世界坐标
+        function clientToWorld(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const cssX = clientX - rect.left;
+            const cssY = clientY - rect.top;
+            const worldX = (cssX - view.tx) / view.scale;
+            const worldY = (cssY - view.ty) / view.scale;
+            return { worldX, worldY, cssX, cssY };
         }
-        return minDist;
+
+        // 查找节点
+        function findNodeAtWorld(x, y) {
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                if (!n.visible) continue;
+                if (Math.hypot(x - n.x, y - n.y) <= n.r + 4) return n;
+            }
+            return null;
+        }
+
+        // 查找连线
+        function findLinkAtWorld(x, y, threshold = 8 / Math.max(0.001, view.scale)) {
+            for (let i = 0; i < links.length; i++) {
+                const l = links[i];
+                if (!l.visible) continue;
+                const sPos = getDisplayPos(l.source);
+                const tPos = getDisplayPos(l.target);
+                const sx = sPos.x, sy = sPos.y, tx = tPos.x, ty = tPos.y;
+                const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+                const dist = distancePointToQuadratic(x, y, sx, sy, ctrl.cx, ctrl.cy, tx, ty, 30);
+                if (dist <= threshold) return l;
+            }
+            return null;
+        }
+
+        // 查找环
+        function findRingAtWorld(x, y, threshold = 6 / Math.max(0.001, view.scale)) {
+            for (const sender of Object.keys(senderRings)) {
+                const owner = nodeById[sender];
+                if (!owner || !owner.visible) continue;
+                const arr = senderRings[sender];
+                for (let idx = 0; idx < arr.length; idx++) {
+                    const rObj = arr[idx];
+                    if (rObj.dateObj > dateState.current) continue;  // ✅ 现在可以访问了
+                    const rad = 12 + idx * 8;
+                    const sp = getDisplayPos(owner);
+                    const d = Math.hypot(x - sp.x, y - sp.y);
+                    if (Math.abs(d - rad) <= threshold) {
+                        return { owner, idx, rad, rObj };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function showTooltipAtClient(clientX, clientY, html) {
+            if (!tooltip) return;
+            tooltip.innerHTML = html;
+            tooltip.style.left = (clientX + 12) + 'px';
+            tooltip.style.top = (clientY - 20) + 'px';
+            tooltip.style.opacity = '1';
+            tooltip.style.display = 'block';
+        }
+
+        function hideTooltip() {
+            if (!tooltip) return;
+            tooltip.style.opacity = '0';
+            tooltip.style.display = 'none';
+        }
+
+        function _pushDragSample(node, x, y, t) {
+            if (!node._dragSamples) node._dragSamples = [];
+            node._dragSamples.push({ x, y, t });
+            if (node._dragSamples.length > 6) node._dragSamples.shift();
+        }
+
+        // ===== mousemove =====
+        canvas.addEventListener('mousemove', (evt) => {
+            if (draggingNode) {
+                const p = clientToWorld(evt.clientX, evt.clientY);
+                const newFx = p.worldX - dragOffset.x;
+                const newFy = p.worldY - dragOffset.y;
+                draggingNode.fx = newFx;
+                draggingNode.fy = newFy;
+                draggingNode.x = newFx;
+                draggingNode.y = newFy;
+                _pushDragSample(draggingNode, newFx, newFy, Date.now());
+                if (tooltip && tooltip.style.display === 'block') {
+                    tooltip.style.left = (evt.clientX + 12) + 'px';
+                    tooltip.style.top = (evt.clientY - 20) + 'px';
+                }
+                return;
+            }
+
+            if (panning && panStart) {
+                const dx = evt.clientX - panStart.clientX;
+                const dy = evt.clientY - panStart.clientY;
+                view.tx = panStart.viewTx + dx;
+                view.ty = panStart.viewTy + dy;
+                return;
+            }
+
+            const p = clientToWorld(evt.clientX, evt.clientY);
+            const worldX = p.worldX, worldY = p.worldY;
+            const node = findNodeAtWorld(worldX, worldY);
+
+            if (node !== hoveredNode) {
+                if (expandedItem) expandedItem = null;
+                hoveredNode = node;
+                hoveredLink = null;
+                hoveredRing = null;
+                if (!node) {
+                    hideTooltip();
+                } else {
+                    const sent = node.sentCount || 0;
+                    const recv = node.recvCount || 0;
+                    const sWords = node.sentWords || 0;
+                    const rWords = node.recvWords || 0;
+                    const aRecv = node.recvACount || 0;
+                    const aWords = node.recvAWords || 0;
+                    const normalRecv = Math.max(0, recv - aRecv);
+                    const normalRWords = Math.max(0, rWords - aWords);
+                    const html = `<b>发信人：</b>${node.displayName || node.id}` +
+                        `<br><b>发出：</b>${sent}` +
+                        `<br><b>发字数：</b>${sWords} 字` +
+                        `<br><b>收到(总)：</b>${recv}` +
+                        `<br><b>收字数(总)：</b>${rWords} 字` +
+                        `<br><b>其中A：</b>${aRecv} 封 / ${aWords} 字` +
+                        `<br><b>BC信：</b>${normalRecv} 封 / ${normalRWords} 字`;
+                    showTooltipAtClient(evt.clientX, evt.clientY, html);
+                }
+            } else if (hoveredNode && tooltip && tooltip.style.display === 'block') {
+                tooltip.style.left = (evt.clientX + 12) + 'px';
+                tooltip.style.top = (evt.clientY - 20) + 'px';
+            }
+
+            if (!hoveredNode) {
+                const link = findLinkAtWorld(worldX, worldY);
+                if (link && link !== hoveredLink) {
+                    if (expandedItem) expandedItem = null;
+                    hoveredLink = link;
+                    hoveredRing = null;
+                    const letter = link.rawLetter || {};
+                    const sender = link.source.id;
+                    const receivers = link.target.id;
+                    const number = link.number || (letter.number || '');
+                    const date = link.date || (letter.date || '');
+                    const type = link.type || (letter.type || '');
+                    const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
+                    showTooltipAtClient(evt.clientX, evt.clientY, html);
+                } else if (!link && hoveredLink) {
+                    hoveredLink = null;
+                    hideTooltip();
+                } else if (hoveredLink && tooltip && tooltip.style.display === 'block') {
+                    tooltip.style.left = (evt.clientX + 12) + 'px';
+                    tooltip.style.top = (evt.clientY - 20) + 'px';
+                }
+
+                if (!hoveredLink && !hoveredNode) {
+                    const ringHit = findRingAtWorld(worldX, worldY);
+                    if (ringHit) {
+                        if (expandedItem) expandedItem = null;
+                        hoveredLink = null;
+                        hoveredNode = null;
+                        hoveredRing = ringHit;
+                        const rObj = ringHit.rObj;
+                        const sender = ringHit.owner.id;
+                        const receivers = (rObj.letter && rObj.letter.receivers) ? rObj.letter.receivers.join(',') : '';
+                        const number = (rObj.letter && rObj.letter.number) || '';
+                        const date = (rObj.letter && rObj.letter.date) || rObj.dateObj.toISOString().slice(0, 10);
+                        const type = 'A';
+                        const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
+                        showTooltipAtClient(evt.clientX, evt.clientY, html);
+                    } else {
+                        hoveredRing = null;
+                    }
+                } else {
+                    hoveredRing = null;
+                }
+            } else {
+                hoveredLink = null;
+                hoveredRing = null;
+            }
+        });
+
+        // ===== mousedown =====
+        canvas.addEventListener('mousedown', (evt) => {
+            if (evt.button !== 0) return;
+            const p = clientToWorld(evt.clientX, evt.clientY);
+            const node = findNodeAtWorld(p.worldX, p.worldY);
+            if (node) {
+                draggingNode = node;
+                dragOffset.x = p.worldX - node.x;
+                dragOffset.y = p.worldY - node.y;
+                node.fx = node.x;
+                node.fy = node.y;
+                node._dragSamples = [{ x: node.x, y: node.y, t: Date.now() }];
+                canvas.style.cursor = 'grabbing';
+            } else {
+                panning = true;
+                panStart = { clientX: evt.clientX, clientY: evt.clientY, viewTx: view.tx, viewTy: view.ty };
+                canvas.style.cursor = 'grabbing';
+            }
+        });
+
+        // ===== mouseup =====
+        window.addEventListener('mouseup', (evt) => {
+            if (draggingNode) {
+                const samples = draggingNode._dragSamples || [];
+                let vx = 0, vy = 0;
+                if (samples.length >= 2) {
+                    const a = samples[samples.length - 2];
+                    const b = samples[samples.length - 1];
+                    const dt = Math.max(1, b.t - a.t) / 1000;
+                    if (dt > 0) {
+                        vx = (b.x - a.x) / dt;
+                        vy = (b.y - a.y) / dt;
+                    }
+                }
+                const MAX_V = 5000;
+                vx = Math.max(-MAX_V, Math.min(MAX_V, vx));
+                vy = Math.max(-MAX_V, Math.min(MAX_V, vy));
+                draggingNode.vx = vx;
+                draggingNode.vy = vy;
+                draggingNode._inertiaActive = (Math.hypot(vx, vy) > 1e-2);
+                if (draggingNode._inertiaActive) {
+                    draggingNode.fx = null;
+                    draggingNode.fy = null;
+                } else {
+                    draggingNode.fx = draggingNode.x;
+                    draggingNode.fy = draggingNode.y;
+                }
+                delete draggingNode._dragSamples;
+                draggingNode = null;
+                canvas.style.cursor = 'default';
+            }
+            if (panning) {
+                panning = false;
+                panStart = null;
+                canvas.style.cursor = 'default';
+            }
+        });
+
+        // ===== wheel =====
+        canvas.addEventListener('wheel', (evt) => {
+            evt.preventDefault();
+            const delta = -evt.deltaY;
+            const zoomFactor = Math.exp(delta * 0.0012);
+            const rect = canvas.getBoundingClientRect();
+            const cssX = evt.clientX - rect.left;
+            const cssY = evt.clientY - rect.top;
+            const wx = (cssX - view.tx) / view.scale;
+            const wy = (cssY - view.ty) / view.scale;
+            let newScale = view.scale * zoomFactor;
+            newScale = Math.max(0.02, Math.min(4, newScale));
+            view.tx = cssX - wx * newScale;
+            view.ty = cssY - wy * newScale;
+            view.scale = newScale;
+        }, { passive: false });
+
+        // ===== click =====
+        canvas.addEventListener('click', (evt) => {
+            if (hoveredLink) {
+                const rawLetter = hoveredLink.rawLetter || {};
+                const rawPath = rawLetter.path || hoveredLink.path || '';
+                const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
+                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const candidates = resolveLetterCandidates(rawPath || '');
+                if (!candidates.length) {
+                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
+                    return;
+                }
+                body.textContent = '正在读取信件...';
+                (function tryOne(i) {
+                    if (i >= candidates.length) {
+                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+                        return;
+                    }
+                    fetch(candidates[i]).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    }).then(txt => {
+                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                    }).catch(() => tryOne(i + 1));
+                })(0);
+                return;
+            }
+
+            if (hoveredRing) {
+                const rObj = hoveredRing.rObj || {};
+                const rawLetter = rObj.letter || rObj || {};
+                const rawPath = rawLetter.path || '';
+                const title = `信件：${hoveredRing.owner.id} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
+                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const candidates = resolveLetterCandidates(rawPath || '');
+                if (!candidates.length) {
+                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
+                    return;
+                }
+                body.textContent = '正在读取信件...';
+                (function tryOne(i) {
+                    if (i >= candidates.length) {
+                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+                        return;
+                    }
+                    fetch(candidates[i]).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    }).then(txt => {
+                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                    }).catch(() => tryOne(i + 1));
+                })(0);
+                return;
+            }
+        });
+
+        // ===== dblclick =====
+        canvas.addEventListener('dblclick', (evt) => {
+            view = computeFitInternal(nodes, width, height, view);
+        });
+
+        // 暴露 hover 状态供外部访问
+        return {
+            getHoveredNode: () => hoveredNode,
+            getHoveredLink: () => hoveredLink,
+            getHoveredRing: () => hoveredRing
+        };
     }
 
-    // update node send/recv counters for a given date (we store counts on node objects)
-// ...existing code...
-    function updateNodeCounters(date) {
-        // zero counters first
+
+
+    //// ========================= 模块拆分：渲染与时间控制 =========================
+
+    /**
+     * 构建节点数据结构（基于 usersData、时间刻度、窗口高度等）
+     * @returns {Object} { nodes, nodeById, nodeByNormName, getNodeByName, nodeJitter }
+     */
+    function buildNodesData(usersData, timeScale, height) {
+        function nameHashToNormalized(name) {
+            let h = 2166136261 >>> 0;
+            for (let i = 0; i < name.length; i++) {
+                h ^= name.charCodeAt(i);
+                h = Math.imul(h, 16777619) >>> 0;
+            }
+            return (h % 1000) / 1000;
+        }
+
+        function normName(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/[\u00A0\u200B-\u200D\u202F\u3000]/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+        }
+
+        const nodes = usersData.map((user, i) => {
+            const registerDate = new Date(user.registerDate);
+            const x = timeScale(registerDate);
+            const band = Math.max(40, height * 0.18);
+            const normalized = nameHashToNormalized(user.name);
+            const yCenter = height * 0.5;
+            const y = yCenter + (normalized - 0.5) * band;
+            return {
+                id: user.name,
+                name: user.name,
+                email: user.email,
+                registerDate: user.registerDate,
+                registerDateObj: registerDate,
+                x: x,
+                y: y,
+                fx: null,
+                fy: null,
+                type: "user",
+                isOC: !!user.isOC,
+                visible: false,
+                r: user.isOC ? 13 : 8,
+                sentCount: 0,
+                recvCount: 0,
+                sentWords: 0,
+                recvWords: 0
+            };
+        });
+
+        const nodeById = {};
+        const nodeByNormName = {};
+        nodes.forEach(n => {
+            nodeById[n.id] = n;
+            nodeByNormName[normName(n.id)] = n;
+        });
+
+        function getNodeByName(name) {
+            return nodeById[name] || nodeByNormName[normName(name)];
+        }
+
+        const nodeJitter = {};
+        nodes.forEach((n, i) => {
+            nodeJitter[n.id] = {
+                ampX: (n.isOC ? 1.6 : 2.4) + Math.random() * 1.8,
+                ampY: (n.isOC ? 1.0 : 1.6) + Math.random() * 1.4,
+                phase: Math.random() * Math.PI * 2,
+                speed: 0.0005 + Math.random() * 0.0012
+            };
+            n._dx = 0;
+            n._dy = 0;
+        });
+
+        return { nodes, nodeById, nodeByNormName, getNodeByName, nodeJitter };
+    }
+
+    /**
+     * 构建连线数据结构（基于 lettersData 和 nodeById）
+     */
+    function buildLinksData(lettersData, nodeById) {
+        const connectionCounts = {};
+        lettersData.forEach(letter => {
+            (letter.receivers || []).forEach(receiver => {
+                const key = letter.sender < receiver ? `${letter.sender}|${receiver}` : `${receiver}|${letter.sender}`;
+                if (!connectionCounts[key]) connectionCounts[key] = { count: 0, connections: [] };
+                connectionCounts[key].count++;
+                connectionCounts[key].connections.push({
+                    source: letter.sender,
+                    target: receiver,
+                    type: letter.type,
+                    number: letter.number,
+                    date: letter.date,
+                    dateObj: new Date(letter.date),
+                    isOCSender: letter.isOCSender || false,
+                    rawLetter: letter
+                });
+            });
+        });
+
+        const links = [];
+        Object.keys(connectionCounts).forEach(key => {
+            const connInfo = connectionCounts[key];
+            const conns = connInfo.connections;
+            const n = conns.length;
+            const order = conns
+                .map((c, i) => ({ idx: i, date: new Date(c.date) }))
+                .sort((a, b) => a.date - b.date)
+                .map(x => x.idx);
+            const idxToRank = {};
+            order.forEach((origIdx, rank) => { idxToRank[origIdx] = rank; });
+            const center = (n - 1) / 2;
+            const SPACING = 3;
+            function rankToPos(rank) {
+                if (rank === 0) return center;
+                const k = Math.ceil(rank / 2);
+                return center + (rank % 2 === 1 ? k : -k);
+            }
+            conns.forEach((conn, idx) => {
+                const sourceNode = nodeById[conn.source];
+                const targetNode = nodeById[conn.target];
+                if (!sourceNode || !targetNode) return;
+                const rank = (typeof idxToRank[idx] !== 'undefined') ? idxToRank[idx] : idx;
+                const pos = rankToPos(rank);
+                const offset = n > 1 ? (pos - center) * SPACING : 0;
+                links.push({
+                    source: sourceNode,
+                    target: targetNode,
+                    type: conn.type,
+                    number: conn.number,
+                    date: conn.date,
+                    dateObj: conn.dateObj,
+                    isOCSender: conn.isOCSender,
+                    offset: offset,
+                    totalConnections: n,
+                    visible: false,
+                    rawLetter: conn.rawLetter
+                });
+            });
+        });
+
+        return links;
+    }
+
+    /**
+     * 构建 A 环数据（从 emailData）
+     */
+    function buildSenderRings(emailData) {
+        function normName(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/[\u00A0\u200B-\u200D\u202F\u3000]/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+        }
+
+        const senderRings = {};
+        const aEarliest = new Map();
+
+        emailData.forEach(e => {
+            const raw = (e.letterType || '').trim();
+            const m = raw.match(/^[Aa][＊*]?\s*[-_·]?\s*(\d+)/);
+            if (!m) return;
+            const digits = m[1];
+            const senderRaw = (e.sender || '').trim();
+            if (!senderRaw) return;
+            const normSender = normName(senderRaw);
+            const d = new Date(e.date);
+            if (isNaN(d)) return;
+
+            const key = `${normSender}|${digits}`;
+            const prev = aEarliest.get(key);
+            if (!prev || d < prev.dateObj) {
+                aEarliest.set(key, {
+                    senderRaw,
+                    normSender,
+                    digits,
+                    dateObj: d,
+                    displayNumber: raw,
+                    date: e.date,
+                    path: e.path || ''
+                });
+            }
+        });
+
+        aEarliest.forEach(v => {
+            const sKey = v.senderRaw;
+            if (!senderRings[sKey]) senderRings[sKey] = [];
+            senderRings[sKey].push({
+                dateObj: v.dateObj,
+                letter: {
+                    sender: sKey,
+                    type: 'A',
+                    number: v.displayNumber,
+                    date: v.date,
+                    receivers: [],
+                    path: v.path
+                }
+            });
+        });
+
+        Object.keys(senderRings).forEach(s => {
+            senderRings[s].sort((a, b) => a.dateObj - b.dateObj);
+        });
+
+        return senderRings;
+    }
+
+    /**
+     * 初始化粒子池（基于 links）
+     */
+    function initParticles(links) {
+        const particles = [];
+        const MAX_PARTICLES = 50;
+        const eligible = [];
+        for (let i = 0; i < links.length; i++) {
+            if (links[i].type === 'B' || links[i].type === 'C') eligible.push(i);
+        }
+        if (eligible.length === 0) return particles;
+        for (let i = 0; i < MAX_PARTICLES; i++) {
+            const li = eligible[Math.floor(Math.random() * eligible.length)];
+            const l = links[li];
+            particles.push({
+                linkIndex: li,
+                position: Math.random(),
+                speed: 0.002 + Math.random() * 0.018,
+                size: (l && l.type === 'C') ? (2.6 + Math.random() * 1.2) : (1.6 + Math.random() * 1.2),
+                color: (l && l.isOCSender) ? 'rgba(80,170,255,0.75)' : (l && l.type === 'B' ? 'rgba(255,120,255,0.98)' : 'rgba(255,220,80,0.98)')
+            });
+        }
+        return particles;
+    }
+
+    /**
+     * 初始化脉冲环（per node）
+     */
+    function initPulseRings(nodes) {
+        return nodes.map((n, idx) => ({
+            ownerId: n.id,
+            minRadius: n.isOC ? 13 : 10,
+            maxRadius: n.isOC ? 33 : 30,
+            currentRadius: n.isOC ? 13 : 10,
+            growing: true,
+            opacity: 0.12,
+            speed: 0.3 + Math.random() * 0.9,
+            colorH: n.isOC ? (120 + idx * 10 % 360) : (180 + idx * 5 % 360)
+        }));
+    }
+
+    /**
+     * 初始化星空背景
+     */
+    function initStars(canvas, width, height) {
+        canvas._stars = [];
+        for (let i = 0; i < 60; i++) {
+            canvas._stars.push({
+                x: Math.random() * width,
+                y: Math.random() * height,
+                r: Math.random() * 1.5 + 0.3,
+                alpha: Math.random() * 0.5 + 0.2
+            });
+        }
+    }
+
+    /**
+     * 更新节点统计（字数、收发件数）
+     */
+    function updateNodeCounters(date, nodes, emailData, ocData, nodeById, hoveredNode, tooltip) {
+        function normName(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/[\u00A0\u200B-\u200D\u202F\u3000]/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+        }
+
         nodes.forEach(n => {
             n.sentCount = 0; n.recvCount = 0;
             n.sentWords = 0; n.recvWords = 0;
-            n.recvACount = 0; n.recvAWords = 0; // 新增A信收件数和字数
+            n.recvACount = 0; n.recvAWords = 0;
         });
 
         const ocNameSet = new Set(ocData.map(o => o.name));
-        const ocNameSetNorm = new Set(ocData.map(o => normName(o.name)));
         const allNodes = nodes.slice();
 
         emailData.forEach(email => {
@@ -1065,12 +1437,8 @@ async function initVisualization() {
                 const sNode = nodeById[sender];
                 const rNode = nodeById[receiver];
 
-                // 发出的记录（发）
                 if (sendType === '发') {
-                    if (letterType === 'A') {
-                        // A 类型发信：按要求暂不计入字数与发件计数
-                        return;
-                    }
+                    if (letterType === 'A') return;
                     if (letterType === 'B') {
                         if (sNode) {
                             sNode.sentWords = (sNode.sentWords || 0) + added;
@@ -1096,16 +1464,12 @@ async function initVisualization() {
                     return;
                 }
 
-                // 收到的记录（收）
                 if (sendType === '收') {
-                    // OC发的A信广播
                     if (isOCSender && letterType === 'A') {
-                        // OC 自身也计为发件（发字数 + 发件计数）
                         if (sNode) {
                             sNode.sentWords = (sNode.sentWords || 0) + added;
                             sNode.sentCount = (sNode.sentCount || 0) + 1;
                         }
-                        // 所有注册日期不晚于该邮件日期的节点都视为收件人
                         allNodes.forEach(n => {
                             try {
                                 const regOk = n.registerDateObj && n.registerDateObj <= eDate;
@@ -1115,16 +1479,11 @@ async function initVisualization() {
                                     n.recvWords = (n.recvWords || 0) + added;
                                     n.recvCount = (n.recvCount || 0) + 1;
                                 }
-                            } catch (e) { /* ignore node errors */ }
+                            } catch (e) { }
                         });
                         return;
                     }
-                    // 非OC发的A信
-                    if (!isOCSender && letterType === 'A') {
-                        // 直接跳过
-                        return;
-                    }
-                    // OC发的B/C信
+                    if (!isOCSender && letterType === 'A') return;
                     if (isOCSender) {
                         if (sNode) {
                             sNode.sentWords = (sNode.sentWords || 0) + added;
@@ -1137,11 +1496,10 @@ async function initVisualization() {
                                     n.recvWords = (n.recvWords || 0) + added;
                                     n.recvCount = (n.recvCount || 0) + 1;
                                 }
-                            } catch (e) { /* ignore node errors */ }
+                            } catch (e) { }
                         });
                         return;
                     }
-                    // 非OC发的B/C信
                     if (sNode) {
                         sNode.sentWords = (sNode.sentWords || 0) + added;
                         sNode.sentCount = (sNode.sentCount || 0) + 1;
@@ -1153,7 +1511,6 @@ async function initVisualization() {
                     return;
                 }
 
-                // 其它情况（未标注发/收），保守处理：尽量归给 sender
                 if (sNode) {
                     sNode.sentWords = (sNode.sentWords || 0) + added;
                     sNode.sentCount = (sNode.sentCount || 0) + 1;
@@ -1162,13 +1519,11 @@ async function initVisualization() {
                     rNode.recvWords = (rNode.recvWords || 0) + added;
                     rNode.recvCount = (rNode.recvCount || 0) + 1;
                 }
-
             } catch (e) {
                 console.debug('[wordcount] accumulate err', e, email);
             }
         });
 
-        // 如果当前有 hover 的节点并且 tooltip 正在显示，立刻刷新浮窗内容（显示字数）
         try {
             if (hoveredNode && tooltip && tooltip.style.display === 'block') {
                 const sent = hoveredNode.sentCount || 0;
@@ -1187,73 +1542,135 @@ async function initVisualization() {
                     `<br><b>其中A：</b>${aRecv} 封 / ${aWords} 字` +
                     `<br><b>BC信：</b>${normalRecv} 封 / ${normalRWords} 字`;
             }
-        } catch (e) { console.debug('[wordcount] tooltip refresh err', e); }
-
-        // debug：少量样例输出
-        try {
-            const sample = nodes.slice(0,12).map(n => ({
-                id:n.id,
-                sentWords:n.sentWords||0,
-                recvWords:n.recvWords||0,
-                sent:n.sentCount,
-                recv:n.recvCount,
-                recvACount:n.recvACount||0,
-                recvAWords:n.recvAWords||0
-            }));
-            // console.debug('[wordcount] updateNodeCounters @', date, sample);
-        } catch(_) {}
+        } catch (e) { }
     }
 
-    // core: onTick renders scene (no force layout updates here)
-    function onTick() {
-        if (!(currentDate instanceof Date)) currentDate = new Date(minDate);
+    /**
+     * 绑定时间控制器（slider/播放按钮等）
+     */
+    function setupTimeControls(state) {
+        const { minDate, maxDate, dateState, timeSlider, timeDisplay, playButton,
+            resetButton, speedOptions, filterByDate, onTick } = state;
 
-        // update visibility based on currentDate (播放控制可见性，不影响位置)
-        nodes.forEach(n => { n.visible = n.registerDateObj <= currentDate; });
-        links.forEach(l => {
-            l.visible = (l.source.registerDateObj <= currentDate) &&
-                        (l.target.registerDateObj <= currentDate) &&
-                        (l.dateObj <= currentDate);
-        });
+        let playInterval = null;
+        let playSpeed = 1;
 
-        // 时间差用于惯性积分（ms -> s）
-        const now = Date.now();
-        if (typeof onTick._lastNow === 'undefined') onTick._lastNow = now;
-        const dt = Math.min(40, now - onTick._lastNow) / 1000; // cap dt to avoid big jumps
-        onTick._lastNow = now;
+        if (timeSlider) {
+            timeSlider.min = 0;
+            timeSlider.max = 100;
+            timeSlider.value = 0;
+        }
 
-        // 更新惯性：若节点被标记为有惯性，则按速度移动，并施加阻尼；速度耗尽后固定位置（fx/fy）
-        const FRICTION = 0.85;      // 每帧阻尼（0..1），可调，越小越快停
-        const VELOCITY_EPS = 4e-3;  // 速度阈值（px/s）以下视为静止
-        nodes.forEach(n => {
-            if (n._inertiaActive) {
-                // 移动位置（以秒为单位）
-                n.x += n.vx * dt;
-                n.y += n.vy * dt;
-                // 衰减速度
-                n.vx *= Math.pow(FRICTION, dt * 60);
-                n.vy *= Math.pow(FRICTION, dt * 60);
-                // 停止条件
-                if (Math.hypot(n.vx, n.vy) < VELOCITY_EPS) {
-                    n.vx = 0; n.vy = 0; n._inertiaActive = false;
-                    // 固定最终位置
-                    n.fx = n.x;
-                    n.fy = n.y;
-                } else {
-                    // 未停止时确保不被其它逻辑覆盖 fx/fy（保持自由移动）
-                    n.fx = null;
-                    n.fy = null;
+        function updateTimeDisplay(date) {
+            const d = date || dateState.current;
+            if (timeDisplay) timeDisplay.textContent = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        function setCurrentDateFromSliderValue(valuePercent) {
+            const p = Math.max(0, Math.min(100, Number(valuePercent)));
+            const timeRange = maxDate.getTime() - minDate.getTime();
+            const newTime = minDate.getTime() + (timeRange * (p / 100));
+            dateState.current = new Date(newTime);
+            filterByDate(dateState.current);
+            updateTimeDisplay(dateState.current);
+            onTick();
+        }
+
+        if (timeSlider) {
+            timeSlider.addEventListener('input', function () {
+                setCurrentDateFromSliderValue(this.value);
+            });
+        }
+
+        function startPlay() {
+            if (playInterval) return;
+            if (playButton) playButton.textContent = "⏸ Pause";
+            playInterval = setInterval(() => {
+                const step = 24 * 60 * 60 * 1000 * playSpeed;
+                const next = new Date(dateState.current.getTime() + step);
+                if (next >= maxDate) {
+                    dateState.current = new Date(maxDate);
+                    if (timeSlider) timeSlider.value = 100;
+                    filterByDate(dateState.current);
+                    updateTimeDisplay(dateState.current);
+                    onTick();
+                    clearInterval(playInterval);
+                    playInterval = null;
+                    if (playButton) playButton.textContent = "▶ Play";
+                    return;
                 }
-            }
+                dateState.current = next;
+                const percent = (dateState.current.getTime() - minDate.getTime()) / (maxDate.getTime() - minDate.getTime()) * 100;
+                if (timeSlider) timeSlider.value = percent;
+                filterByDate(dateState.current);
+                updateTimeDisplay(dateState.current);
+                onTick();
+            }, 120);
+        }
+
+        function stopPlay() {
+            if (!playInterval) return;
+            clearInterval(playInterval);
+            playInterval = null;
+            if (playButton) playButton.textContent = "▶ Play";
+        }
+
+        function togglePlay() {
+            if (playInterval) stopPlay();
+            else startPlay();
+        }
+
+        if (playButton) playButton.addEventListener('click', togglePlay);
+        if (resetButton) resetButton.addEventListener('click', () => {
+            stopPlay();
+            dateState.current = new Date(minDate);
+            if (timeSlider) timeSlider.value = 0;
+            filterByDate(dateState.current);
+            updateTimeDisplay(dateState.current);
+            onTick();
         });
 
-        // clear and set transform
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.setTransform(DPR * view.scale, 0, 0, DPR * view.scale, DPR * view.tx, DPR * view.ty);
+        speedOptions.forEach(opt => {
+            opt.addEventListener('click', function () {
+                speedOptions.forEach(o => o.classList.remove('active'));
+                this.classList.add('active');
+                playSpeed = parseFloat(this.dataset.speed || '1');
+                if (playInterval) {
+                    stopPlay();
+                    startPlay();
+                }
+            });
+        });
 
-        // stars (unchanged) ...
-        // draw links (base) — 使用 display position（随 jitter 一起动）
+        updateTimeDisplay();
+        window.__setVisualizationDatePercent = setCurrentDateFromSliderValue;
+
+        return { updateTimeDisplay, setCurrentDateFromSliderValue, stopPlay };
+    }
+
+
+    //// ========================= 模块拆分：渲染绘制 =========================
+
+    /**
+     * 绘制星空背景
+     */
+    function drawStars(ctx, canvas, DPR) {
+        if (!canvas._stars) return;
+        ctx.save();
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        canvas._stars.forEach(s => {
+            ctx.beginPath();
+            ctx.fillStyle = `rgba(255,255,255,${s.alpha})`;
+            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.restore();
+    }
+
+    /**
+     * 绘制连线基础层（使用二次贝塞尔曲线）
+     */
+    function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl) {
         ctx.save();
         ctx.lineCap = 'round';
         links.forEach(l => {
@@ -1262,15 +1679,17 @@ async function initVisualization() {
             const tPos = getDisplayPos(l.target);
             const sx = sPos.x, sy = sPos.y, tx = tPos.x, ty = tPos.y;
             const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+
             let stroke = 'rgba(150,150,150,0.7)';
             if (l.isOCSender) {
                 if (l.type === 'B') stroke = 'rgba(255,100,100,0.7)';
-                if (l.type === 'C') stroke = 'rgba(100,200,255,0.85)'; // OC 发出的 C 线为较亮的蓝
+                if (l.type === 'C') stroke = 'rgba(100,200,255,0.85)';
             } else {
                 if (l.type === 'A') stroke = 'rgba(0,255,255,0.7)';
                 if (l.type === 'B') stroke = 'rgba(255,100,255,0.7)';
-                if (l.type === 'C') stroke = 'rgba(80,170,255,0.75)'; // 非 OC 的 C 线为蓝色系
+                if (l.type === 'C') stroke = 'rgba(80,170,255,0.75)';
             }
+
             ctx.beginPath();
             ctx.strokeStyle = stroke;
             ctx.lineWidth = l.isOCSender ? (l.type === 'C' ? 2.5 : 2) : (l.type === 'C' ? 2 : 1);
@@ -1278,122 +1697,106 @@ async function initVisualization() {
             ctx.moveTo(sx, sy);
             ctx.quadraticCurveTo(ctrl.cx, ctrl.cy, tx, ty);
             ctx.stroke();
-            // start
-            // 新增：在曲线靠近终点处绘制方向箭头
-            (function drawArrowOnQuad(tPos = 0.95) {
-                // 位置 tPos (0..1) 控制箭头在曲线上靠近终点的位置
-                const t = Math.max(0.01, Math.min(0.99, tPos));
-                const ix = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * ctrl.cx + t * t * tx;
-                const iy = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * ctrl.cy + t * t * ty;
-                // derivative B'(t) = 2(1-t)(C - P0) + 2t(P1 - C)
-                const dx = 2 * (1 - t) * (ctrl.cx - sx) + 2 * t * (tx - ctrl.cx);
-                const dy = 2 * (1 - t) * (ctrl.cy - sy) + 2 * t * (ty - ctrl.cy);
-                const dist = Math.hypot(tx - sx, ty - sy);
-                if (dist < 8) return; // 太短则不绘制箭头
-                const angle = Math.atan2(dy, dx);
 
-                // 箭头在“世界坐标”中应控制大小以在不同缩放下视觉一致
-                const screenArrowPx = 8; // 目标屏幕像素大小
-                const arrowLen = Math.max(4, screenArrowPx / Math.max(0.2, view.scale));
-                const arrowW = Math.max(3, arrowLen * 0.6);
-
-                ctx.save();
-                ctx.translate(ix, iy);
-                ctx.rotate(angle);
-                ctx.globalAlpha = 0.95;
-                // 箭头颜色尽量与线色一致但更实心
-                try {
-                    ctx.fillStyle = stroke || 'rgba(255,255,255,0.95)';
-                } catch (e) {
-                    ctx.fillStyle = 'rgba(255,255,255,0.95)';
-                }
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(-arrowLen, arrowW / 2);
-                ctx.lineTo(-arrowLen, -arrowW / 2);
-                ctx.closePath();
-                ctx.fill();
-                ctx.restore();
-            })();
-
-            // end
+            // 绘制箭头
+            drawArrowOnCurve(ctx, sx, sy, ctrl.cx, ctrl.cy, tx, ty, stroke, 0.95);
         });
         ctx.restore();
-
-        // broadcast lines for OC B — 使用 display pos
-// ...existing code...
-// broadcast lines for OC B — 固定角度，长度伸缩，末端透明渐隐（替换原实现）
-ctx.save();
-ctx.lineWidth = 1.5;
-const nowSec = Date.now() / 1000;
-lettersData.forEach(letter => {
-    if (letter.type === "B" && letter.isOCSender && letter.isBroadcast) {
-        const senderNode = nodeById[letter.sender];
-        if (!senderNode || !senderNode.visible) return;
-        const letterDate = letter.dateObj ? letter.dateObj : new Date(letter.date);
-        if (letterDate > currentDate) return;
-        const sp = getDisplayPos(senderNode);
-
-        const lineCount = 5;
-        // 初始化每条线的固定角度 / 相位 / 基础长度 / 振幅 / 速度
-        if (!letter._bcastState) {
-            letter._bcastState = { angles: [], phases: [], baseLen: [], amps: [], speeds: [] };
-            for (let ii = 0; ii < lineCount; ii++) {
-                // 固定角度均匀分布并加一点微随机扰动（角度不随时间变化）
-                letter._bcastState.angles[ii] = (2 * Math.PI * ii / lineCount) + (Math.random() - 0.5) * 0.06;
-                letter._bcastState.phases[ii] = Math.random() * Math.PI * 2;
-                letter._bcastState.baseLen[ii] = 28 + ii * 8 + Math.random() * 6; // 基础长度
-                letter._bcastState.amps[ii] = 6 + Math.random() * 16;               // 伸缩振幅
-                letter._bcastState.speeds[ii] = 0.6 + Math.random() * 1.2;          // 速度（rad/s）
-            }
-        }
-        const st = letter._bcastState;
-
-        for (let i = 0; i < lineCount; i++) {
-            const ang = st.angles[i];
-            const phase = st.phases[i];
-            const base = st.baseLen[i];
-            const amp = st.amps[i];
-            const speed = st.speeds[i];
-
-            // 长度在 base .. base+amp 之间平滑变化（非旋转）
-            const len = base + amp * (0.5 + 0.5 * Math.sin(phase + nowSec * speed));
-
-            const ex = sp.x + Math.cos(ang) * len;
-            const ey = sp.y + Math.sin(ang) * len;
-
-            // 线性渐变：中心较不透明，末端透明
-            const grad = ctx.createLinearGradient(sp.x, sp.y, ex, ey);
-            // 颜色可调整，这里用偏红到透明（OC B 风格）
-            grad.addColorStop(0.0, 'rgba(255,140,120,0.65)');
-            grad.addColorStop(0.6, 'rgba(255,140,120,0.65)');
-            grad.addColorStop(1.0, 'rgba(255,140,120,0.65)');
-
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = 1.4;
-            ctx.beginPath();
-            ctx.moveTo(sp.x, sp.y);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-
-            // 可选末端小光斑（半透明）增加视觉
-            ctx.fillStyle = 'rgba(255,200,180,0.65)';
-            ctx.beginPath();
-            ctx.arc(ex, ey, 2.2, 0, Math.PI * 2);
-            ctx.fill();
-        }
     }
-});
-ctx.restore();
-// ...existing code...
 
-        // A-rings — 使用 display pos
-// ...existing code...
-        // A-rings — 使用 display pos
+    /**
+     * 在二次贝塞尔曲线上绘制箭头
+     */
+    function drawArrowOnCurve(ctx, sx, sy, cx, cy, tx, ty, stroke, tPos = 0.95) {
+        const t = Math.max(0.01, Math.min(0.99, tPos));
+        const ix = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx;
+        const iy = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty;
+        const dx = 2 * (1 - t) * (cx - sx) + 2 * t * (tx - cx);
+        const dy = 2 * (1 - t) * (cy - sy) + 2 * t * (ty - cy);
+        const dist = Math.hypot(tx - sx, ty - sy);
+        if (dist < 8) return;
+        const angle = Math.atan2(dy, dx);
+
+        const screenArrowPx = 8;
+        const arrowLen = Math.max(4, screenArrowPx / Math.max(0.2, ctx._viewScale || 1));
+        const arrowW = Math.max(3, arrowLen * 0.6);
+
+        ctx.save();
+        ctx.translate(ix, iy);
+        ctx.rotate(angle);
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = stroke || 'rgba(255,255,255,0.95)';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-arrowLen, arrowW / 2);
+        ctx.lineTo(-arrowLen, -arrowW / 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
+
+    /**
+     * 绘制 OC B 类广播线（固定角度，长度伸缩）
+     */
+    function drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, currentDate) {
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        const nowSec = Date.now() / 1000;
+        lettersData.forEach(letter => {
+            if (letter.type !== "B" || !letter.isOCSender || !letter.isBroadcast) return;
+            const senderNode = nodeById[letter.sender];
+            if (!senderNode || !senderNode.visible) return;
+            const letterDate = letter.dateObj ? letter.dateObj : new Date(letter.date);
+            if (letterDate > currentDate) return;
+            const sp = getDisplayPos(senderNode);
+
+            const lineCount = 5;
+            if (!letter._bcastState) {
+                letter._bcastState = { angles: [], phases: [], baseLen: [], amps: [], speeds: [] };
+                for (let ii = 0; ii < lineCount; ii++) {
+                    letter._bcastState.angles[ii] = (2 * Math.PI * ii / lineCount) + (Math.random() - 0.5) * 0.06;
+                    letter._bcastState.phases[ii] = Math.random() * Math.PI * 2;
+                    letter._bcastState.baseLen[ii] = 28 + ii * 8 + Math.random() * 6;
+                    letter._bcastState.amps[ii] = 6 + Math.random() * 16;
+                    letter._bcastState.speeds[ii] = 0.6 + Math.random() * 1.2;
+                }
+            }
+            const st = letter._bcastState;
+
+            for (let i = 0; i < lineCount; i++) {
+                const ang = st.angles[i];
+                const len = st.baseLen[i] + st.amps[i] * (0.5 + 0.5 * Math.sin(st.phases[i] + nowSec * st.speeds[i]));
+                const ex = sp.x + Math.cos(ang) * len;
+                const ey = sp.y + Math.sin(ang) * len;
+
+                const grad = ctx.createLinearGradient(sp.x, sp.y, ex, ey);
+                grad.addColorStop(0.0, 'rgba(255,140,120,0.65)');
+                grad.addColorStop(0.6, 'rgba(255,140,120,0.65)');
+                grad.addColorStop(1.0, 'rgba(255,140,120,0.65)');
+
+                ctx.strokeStyle = grad;
+                ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                ctx.moveTo(sp.x, sp.y);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(255,200,180,0.65)';
+                ctx.beginPath();
+                ctx.arc(ex, ey, 2.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+        ctx.restore();
+    }
+
+    /**
+     * 绘制 A 环（同心圆）
+     */
+    function drawARings(ctx, senderRings, getNodeByName, getDisplayPos, currentDate) {
         ctx.save();
         Object.keys(senderRings).forEach(sender => {
-            const owner = getNodeByName(sender); // 替换：原先 nodeById[sender]
-            if (!owner) console.debug('[A-ring] 未找到节点：', sender);
+            const owner = getNodeByName(sender);
             if (!owner || !owner.visible) return;
             const sp = getDisplayPos(owner);
             const arr = senderRings[sender];
@@ -1411,14 +1814,18 @@ ctx.restore();
         });
         ctx.globalCompositeOperation = 'source-over';
         ctx.restore();
-// ...existing code...
+    }
 
-        // pulse rings — 使用 display pos
+    /**
+     * 绘制脉冲环（动画效果）
+     */
+    function drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos) {
         ctx.save();
         pulseRings.forEach(p => {
             const ownerNode = nodeById[p.ownerId];
             if (!ownerNode || !ownerNode.visible) return;
             const sp = getDisplayPos(ownerNode);
+
             if (p.growing) {
                 p.currentRadius += p.speed;
                 if (p.currentRadius >= p.maxRadius) { p.currentRadius = p.maxRadius; p.growing = false; }
@@ -1426,6 +1833,7 @@ ctx.restore();
                 p.currentRadius -= p.speed;
                 if (p.currentRadius <= p.minRadius) { p.currentRadius = p.minRadius; p.growing = true; }
             }
+
             const fade = 0.15 - (p.currentRadius - p.minRadius) / (p.maxRadius - p.minRadius) * 0.1;
             ctx.beginPath();
             ctx.lineWidth = 2;
@@ -1434,51 +1842,55 @@ ctx.restore();
             ctx.stroke();
         });
         ctx.restore();
-
-        // particles — 使用 display pos
-ctx.save();
-particles.forEach(pr => {
-    // 防御：若 links 结构变化，确保重绑定
-    let l = links[pr.linkIndex];
-    if (!l) {
-        // 试图重新分配到一条存在的链接
-        const elig = [];
-        for (let ii = 0; ii < links.length; ii++) if (links[ii].type === 'B' || links[ii].type === 'C') elig.push(ii);
-        if (elig.length === 0) return;
-        pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
-        l = links[pr.linkIndex];
     }
-    // 如果目标不可见或链接当前不活跃，允许仍然推进位置，
-    // 到达终点时会随机切换到另一条线，避免永久集中在密集线
-    pr.position += pr.speed;
-    if (pr.position > 1) {
-        pr.position = Math.random() * 0.12; // 到达后短暂重新出现，避免“同一时刻都在起点”
-        // 随机切换到另一条可用链接
-        const elig = [];
-        for (let ii = 0; ii < links.length; ii++) if (links[ii].type === 'B' || links[ii].type === 'C') elig.push(ii);
-        if (elig.length > 0) pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
-        l = links[pr.linkIndex];
+
+    /**
+     * 绘制粒子（沿连线运动的光点）
+     */
+    function drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl) {
+        ctx.save();
+        particles.forEach(pr => {
+            let l = links[pr.linkIndex];
+            if (!l) {
+                const elig = [];
+                for (let ii = 0; ii < links.length; ii++) if (links[ii].type === 'B' || links[ii].type === 'C') elig.push(ii);
+                if (elig.length === 0) return;
+                pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
+                l = links[pr.linkIndex];
+            }
+
+            pr.position += pr.speed;
+            if (pr.position > 1) {
+                pr.position = Math.random() * 0.12;
+                const elig = [];
+                for (let ii = 0; ii < links.length; ii++) if (links[ii].type === 'B' || links[ii].type === 'C') elig.push(ii);
+                if (elig.length > 0) pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
+                l = links[pr.linkIndex];
+            }
+            if (!l || !l.visible) return;
+
+            const sPos = getDisplayPos(l.source);
+            const tPos = getDisplayPos(l.target);
+            const sx = sPos.x, sy = sPos.y, tx = tPos.x, ty = tPos.y;
+            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
+            const t = Math.max(0, Math.min(1, pr.position));
+            const x = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * ctrl.cx + t * t * tx;
+            const y = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * ctrl.cy + t * t * ty;
+
+            ctx.beginPath();
+            ctx.fillStyle = pr.color;
+            ctx.globalAlpha = 0.95;
+            ctx.arc(x, y, pr.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.restore();
     }
-    if (!l || !l.visible) return; // 仅在可见时绘制
 
-    const sPos = getDisplayPos(l.source);
-    const tPos = getDisplayPos(l.target);
-    const sx = sPos.x, sy = sPos.y, tx = tPos.x, ty = tPos.y;
-    const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
-    const t = Math.max(0, Math.min(1, pr.position));
-    const x = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * ctrl.cx + t * t * tx;
-    const y = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * ctrl.cy + t * t * ty;
-
-    // 渐变 / 光点效果
-    ctx.beginPath();
-    ctx.fillStyle = pr.color;
-    ctx.globalAlpha = 0.95;
-    ctx.arc(x, y, pr.size, 0, Math.PI * 2);
-    ctx.fill();
-});
-ctx.restore();
-
-        // jitter update (for visual wobble) — 保持不变
+    /**
+     * 更新节点抖动偏移
+     */
+    function updateNodeJitter(nodes, nodeJitter) {
+        const now = Date.now();
         nodes.forEach(n => {
             const j = nodeJitter[n.id];
             if (!j) { n._dx = 0; n._dy = 0; return; }
@@ -1486,20 +1898,22 @@ ctx.restore();
             n._dx = Math.sin(t) * j.ampX;
             n._dy = Math.cos(t) * j.ampY;
         });
+    }
 
-        // nodes 绘制（使用 display pos） ...
+    /**
+     * 绘制节点
+     */
+    function drawNodes(ctx, nodes, getDisplayPos) {
         ctx.save();
         nodes.forEach((n, i) => {
             if (!n.visible) return;
             const d = getDisplayPos(n);
-            const drawX = d.x;
-            const drawY = d.y;
 
             ctx.beginPath();
             ctx.fillStyle = n.isOC ? `hsla(${120 + (i * 12) % 360},100%,60%,0.75)` : `hsla(${180 + (i * 8) % 360},100%,55%,0.6)`;
             ctx.shadowColor = 'rgba(0,255,255,0.18)';
             ctx.shadowBlur = n.isOC ? 6 : 3;
-            ctx.arc(drawX, drawY, n.r, 0, Math.PI * 2);
+            ctx.arc(d.x, d.y, n.r, 0, Math.PI * 2);
             ctx.fill();
             ctx.shadowBlur = 0;
 
@@ -1509,13 +1923,17 @@ ctx.restore();
                 ctx.font = `${Math.max(8, Math.floor(n.r * 0.7))}px zpix, sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText('OC', drawX, drawY);
+                ctx.fillText('OC', d.x, d.y);
                 ctx.restore();
             }
         });
         ctx.restore();
+    }
 
-        // overlay highlights — 使用 display pos
+    /**
+     * 绘制高亮（hover 效果）
+     */
+    function drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, getDisplayPos, computeQuadraticControl) {
         if (hoveredLink) {
             ctx.save();
             ctx.lineWidth = 3;
@@ -1552,386 +1970,142 @@ ctx.restore();
             ctx.stroke();
             ctx.restore();
         }
-    } // end onTick
-    // continuous render loop (we are not relying on d3 simulation ticks anymore)
-    function continuousRender() {
-        onTick();
-        requestAnimationFrame(continuousRender);
-    }
-    continuousRender();
-
-    // interaction / state for dragging/panning
-    let draggingNode = null;
-    let dragOffset = { x: 0, y: 0 };
-    let panning = false;
-    let panStart = null;
-
-    // client -> world conversion using view transform
-    function clientToWorld(clientX, clientY) {
-        const rect = canvas.getBoundingClientRect();
-        const cssX = clientX - rect.left;
-        const cssY = clientY - rect.top;
-        const worldX = (cssX - view.tx) / view.scale;
-        const worldY = (cssY - view.ty) / view.scale;
-        return { worldX, worldY, cssX, cssY };
     }
 
-    function findNodeAtWorld(x, y) {
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            const n = nodes[i];
-            if (!n.visible) continue;
-            const dx = x - n.x;
-            const dy = y - n.y;
-            if (Math.hypot(dx, dy) <= n.r + 4) return n;
-        }
-        return null;
-    }
-
-    function findLinkAtWorld(x, y, threshold = 8 / Math.max(0.001, view.scale)) {
-        for (let i = 0; i < links.length; i++) {
-            const l = links[i];
-            if (!l.visible) continue;
-            // 使用 display pos（包含 jitter / 惯性偏移），与视觉一致
-            const sPos = getDisplayPos(l.source);
-            const tPos = getDisplayPos(l.target);
-            const sx = sPos.x, sy = sPos.y, tx = tPos.x, ty = tPos.y;
-            const ctrl = computeQuadraticControl(sx, sy, tx, ty, l.totalConnections || 1, l.offset);
-            const dist = distancePointToQuadratic(x, y, sx, sy, ctrl.cx, ctrl.cy, tx, ty, 30);
-            if (dist <= threshold) return l;
-        }
-        return null;
-    }
-
-    function findRingAtWorld(x, y, threshold = 6 / Math.max(0.001, view.scale)) {
-        for (const sender of Object.keys(senderRings)) {
-            const owner = nodeById[sender];
-            if (!owner || !owner.visible) continue;
-            const arr = senderRings[sender];
-            for (let idx = 0; idx < arr.length; idx++) {
-                const rObj = arr[idx];
-                if (rObj.dateObj > currentDate) continue;
-                const rad = 12 + idx * 8;
-                // 使用 display pos 与视觉一致
-                const sp = getDisplayPos(owner);
-                const d = Math.hypot(x - sp.x, y - sp.y);
-                if (Math.abs(d - rad) <= threshold) {
-                    return { owner, idx, rad, rObj };
-                }
-            }
-        }
-        return null;
-    }
-
-    function showTooltipAtClient(clientX, clientY, html) {
-        if (!tooltip) return;
-        tooltip.innerHTML = html;
-        tooltip.style.left = (clientX + 12) + 'px';
-        tooltip.style.top = (clientY - 20) + 'px';
-        tooltip.style.opacity = '1';
-        tooltip.style.display = 'block';
-    }
-    function hideTooltip() {
-        if (!tooltip) return;
-        tooltip.style.opacity = '0';
-        tooltip.style.display = 'none';
-    }
-
-    // Mousemove handler: hover, dragging, panning
-// ...existing code...
-
-// ===== 完整替换：mousemove / mousedown / mouseup（带拖拽速度采样与惯性） =====
-
-    // utility: push a sample into node._dragSamples (bounded)
-    function _pushDragSample(node, x, y, t) {
-        if (!node._dragSamples) node._dragSamples = [];
-        node._dragSamples.push({ x, y, t });
-        if (node._dragSamples.length > 6) node._dragSamples.shift(); // keep recent samples
-    }
-
-    // mousemove: hover, drag (record samples), pan
-    canvas.addEventListener('mousemove', (evt) => {
-        // dragging node: update fx/fy and record drag sample for velocity calc
-        if (draggingNode) {
-            const p = clientToWorld(evt.clientX, evt.clientY);
-            const newFx = p.worldX - dragOffset.x;
-            const newFy = p.worldY - dragOffset.y;
-            draggingNode.fx = newFx;
-            draggingNode.fy = newFy;
-            // update node coords for instant visual response
-            draggingNode.x = newFx;
-            draggingNode.y = newFy;
-            // record sample (use ms timestamp)
-            _pushDragSample(draggingNode, newFx, newFy, Date.now());
-            // update tooltip position if visible
-            if (tooltip && tooltip.style.display === 'block') {
-                tooltip.style.left = (evt.clientX + 12) + 'px';
-                tooltip.style.top = (evt.clientY - 20) + 'px';
-            }
-            return;
-        }
-
-        // panning
-        if (panning && panStart) {
-            const dx = evt.clientX - panStart.clientX;
-            const dy = evt.clientY - panStart.clientY;
-            view.tx = panStart.viewTx + dx;
-            view.ty = panStart.viewTy + dy;
-            if (tooltip && tooltip.style.display === 'block') {
-                tooltip.style.left = (evt.clientX + 12) + 'px';
-                tooltip.style.top = (evt.clientY - 20) + 'px';
-            }
-            return;
-        }
-
-        // hover detection (use world coords; findNodeAtWorld uses n.x/n.y)
-        const p = clientToWorld(evt.clientX, evt.clientY);
-        const worldX = p.worldX, worldY = p.worldY;
-        const node = findNodeAtWorld(worldX, worldY);
-
-        if (node !== hoveredNode) {
-            if (expandedItem) expandedItem = null;
-            hoveredNode = node;
-            hoveredLink = null;
-            hoveredRing = null;
-            if (!node) {
-                hideTooltip();
-            } else {
-                const sent = node.sentCount || 0;
-                const recv = node.recvCount || 0;
-                const sWords = node.sentWords || 0;
-                const rWords = node.recvWords || 0;
-                const aRecv = node.recvACount || 0;
-                const aWords = node.recvAWords || 0;
-                const normalRecv = Math.max(0, recv - aRecv);
-                const normalRWords = Math.max(0, rWords - aWords);
-                const html = `<b>发信人：</b>${node.displayName || node.id}` +
-                    `<br><b>发出：</b>${sent}` +
-                    `<br><b>发字数：</b>${sWords} 字` +
-                    `<br><b>收到(总)：</b>${recv}` +
-                    `<br><b>收字数(总)：</b>${rWords} 字` +
-                    `<br><b>其中A：</b>${aRecv} 封 / ${aWords} 字` +
-                    `<br><b>BC信：</b>${normalRecv} 封 / ${normalRWords} 字`;
-                showTooltipAtClient(evt.clientX, evt.clientY, html);
-            }
-        } else {
-            // same node - update tooltip position only
-            if (hoveredNode && tooltip && tooltip.style.display === 'block') {
-                tooltip.style.left = (evt.clientX + 12) + 'px';
-                tooltip.style.top = (evt.clientY - 20) + 'px';
-            }
-        }
-
-        if (!hoveredNode) {
-            const link = findLinkAtWorld(worldX, worldY);
-            if (link && link !== hoveredLink) {
-                if (expandedItem) expandedItem = null;
-                hoveredLink = link;
-                hoveredRing = null;
-                const letter = link.rawLetter || {};
-                const sender = link.source.id;
-                const receivers = link.target.id;
-                const number = link.number || (letter.number || '');
-                const date = link.date || (letter.date || '');
-                const type = link.type || (letter.type || '');
-                const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
-                showTooltipAtClient(evt.clientX, evt.clientY, html);
-            } else if (!link) {
-                if (hoveredLink) {
-                    hoveredLink = null;
-                    hideTooltip();
-                }
-            } else {
-                if (hoveredLink && tooltip && tooltip.style.display === 'block') {
-                    tooltip.style.left = (evt.clientX + 12) + 'px';
-                    tooltip.style.top = (evt.clientY - 20) + 'px';
-                }
-            }
-
-            // rings
-            if (!hoveredLink && !hoveredNode) {
-                const ringHit = findRingAtWorld(worldX, worldY);
-                if (ringHit) {
-                    if (expandedItem) expandedItem = null;
-                    hoveredLink = null;
-                    hoveredNode = null;
-                    hoveredRing = ringHit;
-                    const rObj = ringHit.rObj;
-                    const sender = ringHit.owner.id;
-                    const receivers = (rObj.letter && rObj.letter.receivers) ? rObj.letter.receivers.join(',') : '';
-                    const number = (rObj.letter && rObj.letter.number) || '';
-                    const date = (rObj.letter && rObj.letter.date) || rObj.dateObj.toISOString().slice(0,10);
-                    const type = 'A';
-                    const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
-                    showTooltipAtClient(evt.clientX, evt.clientY, html);
+    /**
+     * 更新节点惯性运动
+     */
+    function updateNodeInertia(nodes, dt) {
+        const FRICTION = 0.85;
+        const VELOCITY_EPS = 4e-3;
+        nodes.forEach(n => {
+            if (n._inertiaActive) {
+                n.x += n.vx * dt;
+                n.y += n.vy * dt;
+                n.vx *= Math.pow(FRICTION, dt * 60);
+                n.vy *= Math.pow(FRICTION, dt * 60);
+                if (Math.hypot(n.vx, n.vy) < VELOCITY_EPS) {
+                    n.vx = 0; n.vy = 0; n._inertiaActive = false;
+                    n.fx = n.x;
+                    n.fy = n.y;
                 } else {
-                    hoveredRing = null;
-                }
-            } else {
-                hoveredRing = null;
-            }
-        } else {
-            hoveredLink = null;
-            hoveredRing = null;
-        }
-    });
-
-    // mousedown: either start dragging node or panning (初始化拖拽采样)
-    canvas.addEventListener('mousedown', (evt) => {
-        if (evt.button !== 0) return;
-        const p = clientToWorld(evt.clientX, evt.clientY);
-        const node = findNodeAtWorld(p.worldX, p.worldY);
-        if (node) {
-            draggingNode = node;
-            dragOffset.x = p.worldX - node.x;
-            dragOffset.y = p.worldY - node.y;
-            // lock node to mouse by setting fx/fy (keep visual follow)
-            node.fx = node.x;
-            node.fy = node.y;
-            // prepare drag samples (fresh)
-            node._dragSamples = [{ x: node.x, y: node.y, t: Date.now() }];
-            canvas.style.cursor = 'grabbing';
-        } else {
-            panning = true;
-            panStart = {
-                clientX: evt.clientX,
-                clientY: evt.clientY,
-                viewTx: view.tx,
-                viewTy: view.ty
-            };
-            canvas.style.cursor = 'grabbing';
-        }
-    });
-
-    // mouseup: stop dragging or panning -> 计算释放速度并启用惯性
-    window.addEventListener('mouseup', (evt) => {
-        if (draggingNode) {
-            // compute velocity from last samples
-            const samples = draggingNode._dragSamples || [];
-            let vx = 0, vy = 0;
-            if (samples.length >= 2) {
-                // use last two samples for dt-average
-                const a = samples[samples.length - 2];
-                const b = samples[samples.length - 1];
-                const dt = Math.max(1, b.t - a.t) / 1000; // seconds
-                if (dt > 0) {
-                    vx = (b.x - a.x) / dt;
-                    vy = (b.y - a.y) / dt;
+                    n.fx = null;
+                    n.fy = null;
                 }
             }
-            // clamp excessive velocity
-            const MAX_V = 5000; // px/s
-            vx = Math.max(-MAX_V, Math.min(MAX_V, vx));
-            vy = Math.max(-MAX_V, Math.min(MAX_V, vy));
-
-            // set velocity and enable inertia integration in onTick
-            draggingNode.vx = vx;
-            draggingNode.vy = vy;
-            draggingNode._inertiaActive = (Math.hypot(vx, vy) > 1e-2);
-
-            // release fixed position so onTick can move node if inertia active
-            if (draggingNode._inertiaActive) {
-                draggingNode.fx = null;
-                draggingNode.fy = null;
-            } else {
-                // keep fixed at current spot
-                draggingNode.fx = draggingNode.x;
-                draggingNode.fy = draggingNode.y;
-            }
-
-            // cleanup samples
-            delete draggingNode._dragSamples;
-            draggingNode = null;
-            canvas.style.cursor = 'default';
-        }
-        if (panning) {
-            panning = false;
-            panStart = null;
-            canvas.style.cursor = 'default';
-        }
-    });
-
-
-// 状态：记录被“展开查看全文”的项（{type:'link'|'ring', id: unique}），鼠标移开后会清除
-let expandedItem = null;
-
-function resolveLetterCandidates(rawPath) {
-    if (!rawPath) return [];
-    let p = rawPath.replace(/\\/g, '/').trim();
-
-    // Windows 绝对路径（如 D:/ZJU/... 或 D:\ZJU\...）
-    if (/^[A-Za-z]:\//.test(p)) {
-        // 去掉尾部斜杠
-        const folder = p.replace(/\/+$/, '');
-        // 直接尝试 file:/// 协议下的常见文件名（content.txt 优先）
-        return [
-            `file:///${folder.replace(/#/g, '%23')}/content.txt`,
-        ];
-    }
-
-    // 项目内相对路径或以 /email/ 的路径 -> 转为相对 ./email/...
-    const idx = p.indexOf('/email/');
-    if (idx !== -1) {
-        p = '.' + p.slice(idx);
-    } else {
-        const m = p.match(/.*(email\/.*)$/i);
-        if (m && m[1]) p = './' + m[1];
-    }
-    p = p.replace(/\/+$/, '');
-
-    const candidates = [];
-    if (p.match(/\.[a-z0-9]+$/i)) {
-        candidates.push(p);
-    } else {
-        candidates.push(`${p}/content.txt`);
-        candidates.push(`${p}/xontnt.txt`);
-        candidates.push(`${p}/内容.txt`);
-        candidates.push(`${p}.txt`);
-        candidates.push(`${p}/content_utf8.txt`);
-    }
-    return [...new Set(candidates)];
-}
-
-// helper: 异步读取并显示信件全文到浮框。按候选路径依次尝试（支持 file:///...）
-function showLetterFullContentAtClient(clientX, clientY, rawPath, fallbackHtml) {
-    const candidates = resolveLetterCandidates(rawPath);
-    if (!candidates.length) {
-        showTooltipAtClient(clientX, clientY, `<pre style="white-space:pre-wrap">${escapeHtml(fallbackHtml || 'No path')}</pre>`);
-        return Promise.resolve();
-    }
-
-    const tryFetch = (i) => {
-        if (i >= candidates.length) {
-            const msg = `无法读取信件全文（尝试路径：${candidates.join(', ')})`;
-            showTooltipAtClient(clientX, clientY, `<div>${escapeHtml(msg)}</div><pre style="white-space:pre-wrap">${escapeHtml(fallbackHtml || '')}</pre>`);
-            return Promise.resolve();
-        }
-        const url = candidates[i];
-        return fetch(url).then(resp => {
-            if (!resp.ok) throw new Error('Fetch failed: ' + resp.status);
-            return resp.text();
-        }).then(text => {
-            const html = `<pre style="white-space:pre-wrap; max-width:520px; color:#dff">${escapeHtml(text)}</pre>`;
-            showTooltipAtClient(clientX, clientY, html);
-        }).catch(() => {
-            return tryFetch(i + 1);
         });
-    };
+    }
 
-    return tryFetch(0);
-}
-// 简单 HTML 转义
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s).replace(/[&<>"']/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch]));
-}
+    /**
+     * 创建主渲染函数（onTick）
+     */
+    function createRenderLoop(state) {
+        const { canvas, ctx, DPR, view, nodes, links, lettersData, nodeById,
+            senderRings, pulseRings, particles, nodeJitter, dateState, minDate,
+            getDisplayPos, getNodeByName, computeQuadraticControl,
+            interactionHandlers } = state;
 
-// ...existing code...
+        function onTick() {
+            if (!(dateState.current instanceof Date)) dateState.current = new Date(minDate);
 
-// ---------- 新增：可移动/可关闭的信件详情弹窗（支持多开） ----------
-(function(){
-    // inject minimal styles
-    const s = document.createElement('style');
-    s.textContent = `
+            // 更新可见性
+            nodes.forEach(n => { n.visible = n.registerDateObj <= dateState.current; });
+            links.forEach(l => {
+                l.visible = (l.source.registerDateObj <= dateState.current) &&
+                    (l.target.registerDateObj <= dateState.current) &&
+                    (l.dateObj <= dateState.current);
+            });
+
+            // 时间差计算
+            const now = Date.now();
+            if (typeof onTick._lastNow === 'undefined') onTick._lastNow = now;
+            const dt = Math.min(40, now - onTick._lastNow) / 1000;
+            onTick._lastNow = now;
+
+            // 更新惯性
+            updateNodeInertia(nodes, dt);
+
+            // 清空画布并设置变换
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(DPR * view.scale, 0, 0, DPR * view.scale, DPR * view.tx, DPR * view.ty);
+            ctx._viewScale = view.scale; // 传给箭头绘制函数
+
+            // 绘制各层
+            drawStars(ctx, canvas, DPR);
+            drawLinks(ctx, links, getDisplayPos, computeQuadraticControl);
+            drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, dateState.current);
+            drawARings(ctx, senderRings, getNodeByName, getDisplayPos, dateState.current);
+            drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos);
+            drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl);
+            updateNodeJitter(nodes, nodeJitter);
+            drawNodes(ctx, nodes, getDisplayPos);
+
+            // 绘制高亮
+            const hoveredNode = interactionHandlers.getHoveredNode();
+            const hoveredLink = interactionHandlers.getHoveredLink();
+            const hoveredRing = interactionHandlers.getHoveredRing();
+            drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, getDisplayPos, computeQuadraticControl);
+        }
+
+        return onTick;
+    }
+
+    //// ========================= 模块拆分：辅助工具 =========================
+
+    /**
+     * HTML 转义
+     */
+    function escapeHtml(s) {
+        if (s == null) return '';
+        return String(s).replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": "&#39;"
+        }[ch]));
+    }
+
+    /**
+     * 解析信件路径为可尝试的候选 URL 列表
+     * @param {string} rawPath - 原始路径（可能是绝对路径或相对路径）
+     * @returns {string[]} - 候选 URL 数组
+     */
+    function resolveLetterCandidates(rawPath) {
+        if (!rawPath) return [];
+        let p = rawPath.replace(/\\/g, '/').trim();
+
+        // Windows 绝对路径（如 D:/ZJU/... 或 D:\ZJU\...）
+        if (/^[A-Za-z]:\//.test(p)) {
+            const folder = p.replace(/\/+$/, '');
+            return [
+                `file:///${folder.replace(/#/g, '%23')}/content.txt`,
+            ];
+        }
+
+        // 项目内相对路径或以 /email/ 的路径 -> 转为相对 ./email/...
+        const idx = p.indexOf('/email/');
+        if (idx !== -1) {
+            p = '.' + p.slice(idx);
+        } else {
+            const m = p.match(/.*(email\/.*)$/i);
+            if (m && m[1]) p = './' + m[1];
+        }
+        p = p.replace(/\/+$/, '');
+
+        // ✅ 关键：在拼接路径之前就对 # 进行编码
+        p = p.replace(/#/g, '%23');
+
+        // 只保留 content.txt
+        const candidates = [];
+        const contentPath = `${p}/content.txt`;
+        candidates.push(contentPath);
+        
+        return [...new Set(candidates)];
+    }
+    /**
+     * 初始化可拖拽信件弹窗系统
+     */
+    function initEmailPopupSystem() {
+        const s = document.createElement('style');
+        s.textContent = `
     .email-popup {
         position: fixed;
         width: 420px;
@@ -1957,28 +2131,54 @@ function escapeHtml(s) {
         align-items:center;
         user-select: none;
     }
-    .email-popup .hdr .title { font-weight:600; color:#bff; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-    .email-popup .hdr .actions { display:flex; gap:6px; }
-    .email-popup .hdr button { background:transparent; border:0; color:#9ff; cursor:pointer; padding:4px; font-size:14px; }
-    .email-popup .body { padding:10px; overflow:auto; flex:1; font-size:13px; line-height:1.4; white-space:pre-wrap; color:#dff; }
-    .email-popup .foot { padding:6px 8px; text-align:right; font-size:12px; color:#99d; background:rgba(0,0,0,0.04); }
-    `;
-    document.head.appendChild(s);
-
-    // bring a popup to front
-    let _popupZ = 2100;
-    function bringToFront(el) {
-        el.style.zIndex = ++_popupZ;
+    .email-popup .hdr .title { 
+        font-weight:600; 
+        color:#bff; 
+        font-size:13px; 
+        white-space:nowrap; 
+        overflow:hidden; 
+        text-overflow:ellipsis;
     }
+    .email-popup .hdr .actions { display:flex; gap:6px; }
+    .email-popup .hdr button { 
+        background:transparent; 
+        border:0; 
+        color:#9ff; 
+        cursor:pointer; 
+        padding:4px; 
+        font-size:14px; 
+    }
+    .email-popup .body { 
+        padding:10px; 
+        overflow:auto; 
+        flex:1; 
+        font-size:13px; 
+        line-height:1.4; 
+        white-space:pre-wrap; 
+        color:#dff; 
+    }
+    .email-popup .foot { 
+        padding:6px 8px; 
+        text-align:right; 
+        font-size:12px; 
+        color:#99d; 
+        background:rgba(0,0,0,0.04); 
+    }
+    `;
+        document.head.appendChild(s);
 
-    // create popup element
-    window.__createEmailPopup = function(title, left, top) {
-        const popup = document.createElement('div');
-        popup.className = 'email-popup';
-        popup.style.left = (left || (window.innerWidth/2 - 210)) + 'px';
-        popup.style.top = (top || (window.innerHeight/2 - 140)) + 'px';
-        popup.style.width = '420px';
-        popup.innerHTML = `
+        let _popupZ = 2100;
+        function bringToFront(el) {
+            el.style.zIndex = ++_popupZ;
+        }
+
+        window.__createEmailPopup = function (title, left, top) {
+            const popup = document.createElement('div');
+            popup.className = 'email-popup';
+            popup.style.left = (left || (window.innerWidth / 2 - 210)) + 'px';
+            popup.style.top = (top || (window.innerHeight / 2 - 140)) + 'px';
+            popup.style.width = '420px';
+            popup.innerHTML = `
             <div class="hdr">
                 <div class="title">${escapeHtml(title || '信件详情')}</div>
                 <div class="actions">
@@ -1988,270 +2188,301 @@ function escapeHtml(s) {
             <div class="body">加载中...</div>
             <div class="foot"><small>可拖拽，右上关闭</small></div>
         `;
-        document.body.appendChild(popup);
-        bringToFront(popup);
-
-        const hdr = popup.querySelector('.hdr');
-        const body = popup.querySelector('.body');
-        const closeBtn = popup.querySelector('.btn-close');
-
-        // draggable
-        let dragging = false, dx = 0, dy = 0;
-        hdr.addEventListener('mousedown', (e) => {
-            dragging = true;
+            document.body.appendChild(popup);
             bringToFront(popup);
-            const rect = popup.getBoundingClientRect();
-            dx = e.clientX - rect.left;
-            dy = e.clientY - rect.top;
-            document.addEventListener('mousemove', _onmove);
-            document.addEventListener('mouseup', _onup);
-            e.preventDefault();
-        });
-        function _onmove(ev) {
-            if (!dragging) return;
-            // 不强制限制到可见区域，允许弹窗部分在窗口外
-            popup.style.left = (ev.clientX - dx) + 'px';
-            popup.style.top = (ev.clientY - dy) + 'px';
-        }
-        function _onup() {
-            dragging = false;
-            document.removeEventListener('mousemove', _onmove);
-            document.removeEventListener('mouseup', _onup);
-        }
 
-        // focus on mousedown
-        popup.addEventListener('mousedown', () => bringToFront(popup));
+            const hdr = popup.querySelector('.hdr');
+            const body = popup.querySelector('.body');
+            const closeBtn = popup.querySelector('.btn-close');
 
-        // close
-        closeBtn.addEventListener('click', () => {
-            popup.remove();
-        });
+            let dragging = false, dx = 0, dy = 0;
+            hdr.addEventListener('mousedown', (e) => {
+                dragging = true;
+                bringToFront(popup);
+                const rect = popup.getBoundingClientRect();
+                dx = e.clientX - rect.left;
+                dy = e.clientY - rect.top;
+                document.addEventListener('mousemove', _onmove);
+                document.addEventListener('mouseup', _onup);
+                e.preventDefault();
+            });
+            function _onmove(ev) {
+                if (!dragging) return;
+                popup.style.left = (ev.clientX - dx) + 'px';
+                popup.style.top = (ev.clientY - dy) + 'px';
+            }
+            function _onup() {
+                dragging = false;
+                document.removeEventListener('mousemove', _onmove);
+                document.removeEventListener('mouseup', _onup);
+            }
 
-        return { popup, body, setTitle: t => popup.querySelector('.title').textContent = t, close: () => popup.remove() };
-    };
-})();
+            popup.addEventListener('mousedown', () => bringToFront(popup));
+            closeBtn.addEventListener('click', () => popup.remove());
 
+            return {
+                popup,
+                body,
+                setTitle: t => popup.querySelector('.title').textContent = t,
+                close: () => popup.remove()
+            };
+        };
+    }
 
-// 替换原有的 canvas.addEventListener('click', ...) 整段为下面实现
-canvas.addEventListener('click', (evt) => {
-    // 优先使用 mousemove 已设置的 hoveredLink / hoveredRing
-    if (hoveredLink) {
-        const rawLetter = hoveredLink.rawLetter || {};
-        const rawPath = rawLetter.path || hoveredLink.path || '';
-        const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
-        // open movable popup at click position
-        const { popup, body, setTitle } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
-        // try candidates and fill body
-        const candidates = resolveLetterCandidates(rawPath || '');
-        if (!candidates.length) {
-            body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
-            return;
-        }
-        body.textContent = '正在读取信件...';
-        // try sequentially
-        (function tryOne(i){
-            if (i >= candidates.length) {
-                body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+    /**
+     * 绑定点击事件处理（打开信件详情弹窗）
+     */
+    function setupClickHandlers(canvas, interactionHandlers) {
+        canvas.addEventListener('click', (evt) => {
+            const hoveredLink = interactionHandlers.getHoveredLink();
+            const hoveredRing = interactionHandlers.getHoveredRing();
+
+            if (hoveredLink) {
+                const rawLetter = hoveredLink.rawLetter || {};
+                const rawPath = rawLetter.path || hoveredLink.path || '';
+                const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
+                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const candidates = resolveLetterCandidates(rawPath || '');
+                if (!candidates.length) {
+                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
+                    return;
+                }
+                body.textContent = '正在读取信件...';
+                (function tryOne(i) {
+                    if (i >= candidates.length) {
+                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+                        return;
+                    }
+                    fetch(candidates[i]).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    }).then(txt => {
+                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                    }).catch(() => tryOne(i + 1));
+                })(0);
                 return;
             }
-            fetch(candidates[i]).then(r => {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.text();
-            }).then(txt => {
-                body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
-            }).catch(() => tryOne(i+1));
-        })(0);
-        return;
-    }
 
-    if (hoveredRing) {
-        const rObj = hoveredRing.rObj || {};
-        const rawLetter = rObj.letter || rObj || {};
-        const rawPath = rawLetter.path || '';
-        const title = `信件：${hoveredRing.owner.id} ${ (rObj.dateObj ? rObj.dateObj.toISOString().slice(0,10) : (rObj.date||'')) }`;
-        const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
-        const candidates = resolveLetterCandidates(rawPath || '');
-        if (!candidates.length) {
-            body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
-            return;
-        }
-        body.textContent = '正在读取信件...';
-        (function tryOne(i){
-            if (i >= candidates.length) {
-                body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+            if (hoveredRing) {
+                const rObj = hoveredRing.rObj || {};
+                const rawLetter = rObj.letter || rObj || {};
+                const rawPath = rawLetter.path || '';
+                const title = `信件：${hoveredRing.owner.id} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
+                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const candidates = resolveLetterCandidates(rawPath || '');
+                if (!candidates.length) {
+                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
+                    return;
+                }
+                body.textContent = '正在读取信件...';
+                (function tryOne(i) {
+                    if (i >= candidates.length) {
+                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+                        return;
+                    }
+                    fetch(candidates[i]).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    }).then(txt => {
+                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                    }).catch(() => tryOne(i + 1));
+                })(0);
                 return;
             }
-            fetch(candidates[i]).then(r => {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.text();
-            }).then(txt => {
-                body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
-            }).catch(() => tryOne(i+1));
-        })(0);
-        return;
-    }
-
-    // 点击空白不再自动关闭弹窗或 tooltip（弹窗由用户关闭）
-});
-
-// 在 mousemove 里：当 hover 项改变时，若存在 expandedItem 则清除（保证离开后再次回到显示简要）
-// 下面为补丁：在 canvas.addEventListener('mousemove', ...) 内合适位置（当 hoveredNode/hoveredLink/hoveredRing 发生变化时）
-// 将下面短逻辑插入到你的 mousemove 变化处理处（即当设置 hoveredNode = node; hoveredLink = link; hoveredRing = ring 的地方）：
-/*
-    // 当 hover 变化时清除已展开的全文状态（以保证再次进入时显示简要）
-    if (expandedItem) {
-        expandedItem = null;
-        // 不要立即 hideTooltip 如果你想显示新的简要框可以依赖后续 hover 分支显示
-    }
-*/
-
-// ...existing code...
-
-    canvas.addEventListener('dblclick', (evt) => {
-        // reset fit
-        computeFit();
-    });
-
-    // wheel zoom (center on mouse)
-    canvas.addEventListener('wheel', (evt) => {
-        evt.preventDefault();
-        const delta = -evt.deltaY;
-        const zoomFactor = Math.exp(delta * 0.0012);
-        const rect = canvas.getBoundingClientRect();
-        const cssX = evt.clientX - rect.left;
-        const cssY = evt.clientY - rect.top;
-        const wx = (cssX - view.tx) / view.scale;
-        const wy = (cssY - view.ty) / view.scale;
-        let newScale = view.scale * zoomFactor;
-        newScale = Math.max(0.02, Math.min(4, newScale));
-        view.tx = cssX - wx * newScale;
-        view.ty = cssY - wy * newScale;
-        view.scale = newScale;
-        if (tooltip && tooltip.style.display === 'block') {
-            tooltip.style.left = (evt.clientX + 12) + 'px';
-            tooltip.style.top = (evt.clientY - 20) + 'px';
-        }
-    }, { passive: false });
-
-    // time controls (reuse DOM if present)
-    const timeSlider = document.getElementById('timeSlider');
-    const timeDisplay = document.getElementById('timeDisplay');
-    const playButton = document.getElementById('playButton');
-    const resetButton = document.getElementById('resetButton');
-    const speedOptions = document.querySelectorAll('.speed-option');
-
-    if (timeSlider) {
-        timeSlider.min = 0;
-        timeSlider.max = 100;
-        timeSlider.value = 0;
-    }
-
-    function updateTimeDisplay(date) {
-        const d = date || currentDate;
-        if (timeDisplay) timeDisplay.textContent = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-    }
-
-    function setCurrentDateFromSliderValue(valuePercent) {
-        const p = Math.max(0, Math.min(100, Number(valuePercent)));
-        const timeRange = maxDate.getTime() - minDate.getTime();
-        const newTime = minDate.getTime() + (timeRange * (p / 100));
-        currentDate = new Date(newTime);
-        filterByDate(currentDate);
-        onTick();
-    }
-
-// ...existing code...
-
-    function filterByDate(date) {
-        // set visibility (onTick will draw accordingly)
-        nodes.forEach(n => n.visible = n.registerDateObj <= date);
-        links.forEach(link => {
-            const sourceVisible = link.source && link.source.registerDateObj && link.source.registerDateObj <= date;
-            const targetVisible = link.target && link.target.registerDateObj && link.target.registerDateObj <= date;
-            link.visible = sourceVisible && targetVisible && link.dateObj <= date;
-        });
-        // update counters for tooltips
-        updateNodeCounters(date);
-        updateTimeDisplay(date);
-        // 不要在播放过程中重新计算布局或视图：时间线只控制可见性
-        // 如需用户触发的“聚焦可见子集”，请提供单独按钮调用 computeFit()
-    }
-
-// ...existing code...
-    if (timeSlider) {
-        timeSlider.addEventListener('input', function() {
-            setCurrentDateFromSliderValue(this.value);
         });
     }
 
-    function startPlay() {
-        if (playInterval) return;
-        if (playButton) playButton.textContent = "⏸ Pause";
-        playInterval = setInterval(() => {
-            const step = 24 * 60 * 60 * 1000 * playSpeed;
-            const next = new Date(currentDate.getTime() + step);
-            if (next >= maxDate) {
-                currentDate = new Date(maxDate);
-                if (timeSlider) timeSlider.value = 100;
-                filterByDate(currentDate);
-                onTick();
-                clearInterval(playInterval);
-                playInterval = null;
-                if (playButton) playButton.textContent = "▶ Play";
-                return;
+    /**
+     * 绑定其他画布事件（双击适配、滚轮缩放）
+     */
+    function setupCanvasEvents(canvas, nodes, view, width, height, tooltip) {
+        // 双击适配视图
+        canvas.addEventListener('dblclick', (evt) => {
+            view.scale = 1;
+            view.tx = 0;
+            view.ty = 0;
+            const newView = computeFitInternal(nodes, width, height, view);
+            view.scale = newView.scale;
+            view.tx = newView.tx;
+            view.ty = newView.ty;
+        });
+
+        // 滚轮缩放
+        canvas.addEventListener('wheel', (evt) => {
+            evt.preventDefault();
+            const delta = -evt.deltaY;
+            const zoomFactor = Math.exp(delta * 0.0012);
+            const rect = canvas.getBoundingClientRect();
+            const cssX = evt.clientX - rect.left;
+            const cssY = evt.clientY - rect.top;
+            const wx = (cssX - view.tx) / view.scale;
+            const wy = (cssY - view.ty) / view.scale;
+            let newScale = view.scale * zoomFactor;
+            newScale = Math.max(0.02, Math.min(4, newScale));
+            view.tx = cssX - wx * newScale;
+            view.ty = cssY - wy * newScale;
+            view.scale = newScale;
+            if (tooltip && tooltip.style.display === 'block') {
+                tooltip.style.left = (evt.clientX + 12) + 'px';
+                tooltip.style.top = (evt.clientY - 20) + 'px';
             }
-            currentDate = next;
-            const percent = (currentDate.getTime() - minDate.getTime()) / (maxDate.getTime() - minDate.getTime()) * 100;
-            if (timeSlider) timeSlider.value = percent;
-            filterByDate(currentDate);
-            onTick();
-        }, 120);
+        }, { passive: false });
     }
 
-    function stopPlay() {
-        if (!playInterval) return;
-        clearInterval(playInterval);
-        playInterval = null;
-        if (playButton) playButton.textContent = "▶ Play";
+
+    //// ========================= 模块拆分：几何计算辅助函数 =========================
+
+    /**
+     * 获取节点当前显示位置（考虑抖动偏移）
+     */
+    function createGetDisplayPos() {
+        return function (n) {
+            return { x: n.x + (n._dx || 0), y: n.y + (n._dy || 0) };
+        };
     }
 
-    function togglePlay() {
-        if (playInterval) stopPlay();
-        else startPlay();
+    /**
+     * 计算二次贝塞尔曲线的控制点（多连线交替分布）
+     */
+    function createComputeQuadraticControl() {
+        return function (sourceX, sourceY, targetX, targetY, total, offset) {
+            const center = (total - 1) / 2;
+            const idx = offset ? (offset / 3 + center) : 0;
+            const delta = idx - center;
+            const BASE_CURVE = 20;
+            const magnitude = Math.abs(delta) + 0.5;
+            const sign = (Math.round(Math.abs(delta)) % 2 === 0) ? 1 : -1;
+            const curve = BASE_CURVE * magnitude * sign;
+
+            const dx = targetX - sourceX;
+            const dy = targetY - sourceY;
+            const len = Math.hypot(dx, dy) || 1;
+            const cx = (sourceX + targetX) / 2 + curve * (dy) / len;
+            const cy = (sourceY + targetY) / 2 - curve * (dx) / len;
+            return { cx, cy };
+        };
     }
 
-    if (playButton) playButton.addEventListener('click', togglePlay);
-    if (resetButton) resetButton.addEventListener('click', () => {
-        stopPlay();
-        currentDate = new Date(minDate);
+    /**
+     * 计算点到二次贝塞尔曲线的最短距离
+     */
+    function createDistancePointToQuadratic() {
+        return function (px, py, x0, y0, cx, cy, x1, y1, steps = 28) {
+            let minDist = Infinity;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const ix = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
+                const iy = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * cy + t * t * y1;
+                const d = Math.hypot(px - ix, py - iy);
+                if (d < minDist) minDist = d;
+            }
+            return minDist;
+        };
+    }
+
+    /**
+     * 创建初始视图状态
+     */
+    function createInitialView() {
+        return { scale: 1, tx: 0, ty: 0 };
+    }
+
+    /**
+     * 绑定窗口 resize 事件
+     */
+    function setupResizeHandler(resizeCanvas, timeScale, nodes, links, view, width, height) {
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            if (typeof timeScale !== 'undefined' && timeScale.range) {
+                timeScale.range([width() * 0.1, width() * 0.9]);
+            }
+            const newView = computeInitialLayout(nodes, links, timeScale, view, width(), height(), 300);
+            view.scale = newView.scale;
+            view.tx = newView.tx;
+            view.ty = newView.ty;
+        });
+    }
+
+    /**
+     * 初始化时间过滤函数
+     */
+    function createFilterByDate(nodes, links, emailData, ocData, nodeById, getHoveredNode, tooltip) {
+        return function (date) {
+            nodes.forEach(n => n.visible = n.registerDateObj <= date);
+            links.forEach(link => {
+                const sourceVisible = link.source && link.source.registerDateObj && link.source.registerDateObj <= date;
+                const targetVisible = link.target && link.target.registerDateObj && link.target.registerDateObj <= date;
+                link.visible = sourceVisible && targetVisible && link.dateObj <= date;
+            });
+            const hoveredNode = getHoveredNode ? getHoveredNode() : null;
+            updateNodeCounters(date, nodes, emailData, ocData, nodeById, hoveredNode, tooltip);
+        };
+    }
+
+
+    async function initVisualization() {
+        // 1. 加载数据
+        const { ocData, emailData } = await loadEmailData();
+        const { usersData, lettersData } = buildVisualizationData(ocData, emailData);
+
+        // 2. 计算时间范围
+        let { minDate, maxDate, playInterval, playSpeed } = computeTimeState(usersData, lettersData);
+        const dateState = { current: new Date(minDate) };
+
+        // 3. 初始化画布
+        const { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height } = setupCanvasAndTooltip();
+
+        // 4. 构建时间刻度
+        const dateExtent = d3.extent(usersData, d => new Date(d.registerDate));
+        const timeScale = d3.scaleTime().domain(dateExtent).range([width * 0.1, width * 0.9]);
+
+        // 5. 构建数据结构
+        const { nodes, nodeById, nodeByNormName, getNodeByName, nodeJitter } = buildNodesData(usersData, timeScale, height);
+        const links = buildLinksData(lettersData, nodeById);
+        const senderRings = buildSenderRings(emailData);
+        const particles = initParticles(links);
+        const pulseRings = initPulseRings(nodes);
+        initStars(canvas, width, height);
+
+        // 6. 创建辅助函数与初始视图
+        const getDisplayPos = createGetDisplayPos();
+        const computeQuadraticControl = createComputeQuadraticControl();
+        const distancePointToQuadratic = createDistancePointToQuadratic();
+        let view = createInitialView();
+        view = computeInitialLayout(nodes, links, timeScale, view, width, height, 300);
+
+        // 7. 绑定交互
+        const interactionState = { canvas, nodes, links, view, tooltip, senderRings, nodeById, getDisplayPos, computeQuadraticControl, distancePointToQuadratic, width, height, dateState };
+        const interactionHandlers = setupInteractions(interactionState);
+
+        // 8. 启动渲染
+        const renderState = { canvas, ctx, DPR, view, nodes, links, lettersData, nodeById, senderRings, pulseRings, particles, nodeJitter, dateState, minDate, getDisplayPos, getNodeByName, computeQuadraticControl, interactionHandlers };
+        const onTick = createRenderLoop(renderState);
+        function continuousRender() { onTick(); requestAnimationFrame(continuousRender); }
+        continuousRender();
+
+        // 9. 初始化弹窗与事件
+        initEmailPopupSystem();
+        setupClickHandlers(canvas, interactionHandlers);
+        setupCanvasEvents(canvas, nodes, view, width, height, tooltip);
+
+        // 10. 绑定时间控制
+        const timeSlider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const playButton = document.getElementById('playButton');
+        const resetButton = document.getElementById('resetButton');
+        const speedOptions = document.querySelectorAll('.speed-option');
+        const filterByDate = createFilterByDate(nodes, links, emailData, ocData, nodeById, () => interactionHandlers.getHoveredNode(), tooltip);
+        const timeControlState = { minDate, maxDate, dateState, timeSlider, timeDisplay, playButton, resetButton, speedOptions, filterByDate, onTick };
+        setupTimeControls(timeControlState);
+
+        // 11. 初始化时间轴
+        dateState.current = new Date(minDate);
         if (timeSlider) timeSlider.value = 0;
-        filterByDate(currentDate);
-        onTick();
-    });
+        filterByDate(dateState.current);
+    }
 
-    speedOptions.forEach(opt => {
-        opt.addEventListener('click', function() {
-            speedOptions.forEach(o => o.classList.remove('active'));
-            this.classList.add('active');
-            playSpeed = parseFloat(this.dataset.speed || '1');
-            if (playInterval) {
-                stopPlay();
-                startPlay();
-            }
-        });
-    });
-
-    // initialize (set date, compute counters, initial visibility)
-    currentDate = new Date(minDate);
-    if (timeSlider) timeSlider.value = 0;
-    filterByDate(currentDate);
-    updateTimeDisplay();
-
-    // expose setter
-    window.__setVisualizationDatePercent = setCurrentDateFromSliderValue;
-} // end initVisualization
-
-document.addEventListener('DOMContentLoaded', initVisualization);
+    document.addEventListener('DOMContentLoaded', initVisualization);
 </script>
 
 </html>

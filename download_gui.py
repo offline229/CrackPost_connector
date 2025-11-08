@@ -30,6 +30,16 @@ import imaplib, ssl, sys
 # 	第一步，对所有有明确的发件人 收件人的收信，检索其是否在contenttxt中带有附件 的字样	
 # 	若有，则找到
 # 处理掉对#的错误支持 135 195
+# 允许配置下载位置
+# 增加错误处理
+# 增加日志
+# 不匹配结果显示且仅显示满足收发件邮箱地址条件的，也就是即使不匹配，也必须是收发地址正确但格式不正确的
+# 增加未匹配手动加入功能
+# 增加html界面的手动打开功能
+# 下载时，发件可能是A B C某人 
+# 收件可能是
+# 在选项卡恢复下载地址，但默认下载地址为根目录下email文件夹
+# 看来不能用跨域了，必须要在html里面加一个手动载入
 
 # 打包指南
 
@@ -719,8 +729,8 @@ class EmailDownloader:
                 logger.info(f"匹配当前规则邮件数: {len(matched_emails)}")
                 logger.info(f"未匹配当前规则邮件数: {len(unmatched)}")
                 if unmatched:
-                    logger.info(f"未匹配邮件数量: {len(unmatched)}，前{min(20, len(unmatched))}个主题如下：")
-                    for i, subj in enumerate(unmatched[:20]):
+                    logger.info(f"未匹配邮件数量: {len(unmatched)}，前{min(300, len(unmatched))}个主题如下：")
+                    for i, subj in enumerate(unmatched[:300]):
                         print(f"[未匹配{i+1}] {subj}")
             # 保存未匹配列表以便 GUI 弹窗展示
             self.last_unmatched = unmatched
@@ -1756,7 +1766,7 @@ class EmailDownloaderGUI:
         
         # 最大结果数
         ttk.Label(search_frame, text="最多搜索:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.max_results_var = tk.StringVar(value="500")
+        self.max_results_var = tk.StringVar(value="1500")
         max_results_entry = ttk.Entry(search_frame, textvariable=self.max_results_var, width=10)
         max_results_entry.grid(row=4, column=1, sticky=tk.W, pady=5)
         ttk.Label(search_frame, text="封邮件").grid(row=4, column=2, sticky=tk.W, pady=5)
@@ -2009,7 +2019,7 @@ class EmailDownloaderGUI:
         self.sender_var.set("")
         self.recipient_var.set("")
         self.subject_var.set("")
-        self.max_results_var.set("500")
+        self.max_results_var.set("1500")
     
     def search_emails(self):
         """搜索邮件"""
@@ -2057,9 +2067,9 @@ class EmailDownloaderGUI:
         try:
             max_emails = int(self.max_results_var.get())
             if max_emails <= 0:
-                max_emails = 500
+                max_emails = 1500
         except:
-            max_emails = 500
+            max_emails = 1500
         
         # 清空当前结果
         for item in self.results_tree.get_children():
@@ -2111,8 +2121,8 @@ class EmailDownloaderGUI:
                     win.geometry("700x420")
                     txt = scrolledtext.ScrolledText(win, wrap=tk.WORD)
                     txt.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
-                    header = f"未匹配邮件数量: {len(unmatched)}\n显示前 {min(20, len(unmatched))} 条：\n\n"
-                    txt.insert(tk.END, header + "\n".join(unmatched[:20]))
+                    header = f"未匹配邮件数量: {len(unmatched)}\n显示前 {min(300, len(unmatched))} 条：\n\n"
+                    txt.insert(tk.END, header + "\n".join(unmatched[:300]))
                     txt.configure(state='disabled')
                     # 模态
                     try:
