@@ -249,7 +249,8 @@
     // 加入初始化进度条
     // 增加附件收纳
     // 增加每日收件数
-    // 规范刷新频率
+    // b不可点击
+    // 待测试里有需要改的东西
 
     //// ========================= 数据加载 =========================
 
@@ -318,6 +319,7 @@
         return [...new Set(candidates)];
     }
 
+    //待测试，字数
     /**
      * 读取候选路径之一的内容并计算字数，写回 emailObj.wordCount，必要时抽取发件人
      * @param {object} emailObj - emailData 中的一条记录（将被就地写 wordCount）
@@ -489,7 +491,7 @@
         }
 
         /**
-         * 辅助：找到给定日期之前最近的若干 OC（用于 B 信推断）
+         * 辅助：找到给定日期之前最近的若干 OC（用于 B 信推断），待测试，b发给所有ic
          */
         function findRelevantOCs(date, ocHistory) {
             const emailDate = new Date(date);
@@ -847,7 +849,7 @@
                 const arr = senderRings[sender];
                 for (let idx = 0; idx < arr.length; idx++) {
                     const rObj = arr[idx];
-                    if (rObj.dateObj > dateState.current) continue;  // ✅ 现在可以访问了
+                    if (rObj.dateObj > dateState.current) continue;  
                     const rad = 12 + idx * 8;
                     const sp = getDisplayPos(owner);
                     const d = Math.hypot(x - sp.x, y - sp.y);
@@ -2482,7 +2484,501 @@
         filterByDate(dateState.current);
     }
 
-    document.addEventListener('DOMContentLoaded', initVisualization);
+    
+</script>
+
+
+<style>
+/* Intro 覆盖层与打字动画样式（像素风冷工业版） */
+#introOverlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 4000;
+  background:
+    repeating-linear-gradient(0deg, rgba(20,38,56,0.35) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, rgba(20,38,56,0.35) 0 1px, transparent 1px 24px),
+    #0b1624; /* 深暗蓝底 */
+  backdrop-filter: none;
+  font-family: 'zpix', sans-serif;
+  overflow: hidden;
+}
+
+#introOverlay::before { content: none !important; }
+
+.intro-center {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; text-align: center;
+  width: min(720px, 92vw);
+}
+
+.intro-title {
+  color: rgba(0, 200, 255, 0.8);
+  text-shadow: 0 0 4px rgba(0,200,255,0.35), 0 0 8px rgba(0,200,255,0.18);
+  font-weight: bold;
+  font-size: 22px; /* 更大 */
+}
+
+/* 居中按钮：深色、无圆角、无高光 */
+#introSelectBtn {
+  display: inline-block;
+  background: #102232;
+  border: 1px solid #436789;
+  color: #b7c7d6; font-size: 14px;
+  padding: 14px 32px; border-radius: 0;
+  cursor: pointer; letter-spacing: 1px;
+  transition: none; box-shadow: none;
+  font-family: 'zpix', sans-serif;
+  font-weight: bold;
+  font-size: 18px;
+  border-width: 2.5px;
+}
+#introSelectBtn:hover { background: #132a3f; border-color: #2a4157; }
+
+/* 方格进度条：纯方块，无圆角无高光 */
+.intro-progress-wrap { display: none; width: 100%; justify-content: center; }
+.intro-progress-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 12px;
+  grid-template-rows: 12px;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(9,18,30,0.6);
+  border: 2.5px solid #1b2a3a;
+  border-radius: 0;
+  box-shadow: none;
+}
+.intro-progress-grid .sq {
+  width: 12px; height: 12px;
+  border-radius: 0;
+  border: 1px solid #1e2c3c;
+  background: #0f1d2b;
+  box-shadow: none;
+  transition: none;
+}
+.intro-progress-grid .sq.on {
+  background: #3f6385;
+  border-color: #3f6385;
+}
+
+.intro-lines {
+  min-height: 84px; 
+  color: #9fb3c7;
+  font-size: 16px; /* 稍微大一点 */
+  line-height: 1.7; 
+  white-space: pre-line;
+  font-family: 'zpix', sans-serif;
+  font-weight: bold; /* 加粗 */
+}
+.intro-line {
+  font-weight: bold; /* 加粗 */
+}
+.intro-line span.char { opacity: 0; animation: fadeInChar .25s forwards; }
+@keyframes fadeInChar { to { opacity: 1; } }
+
+.fade-out { animation: fadeOutOverlay .6s forwards; }
+@keyframes fadeOutOverlay { to { opacity: 0; visibility: hidden; } }
+</style>
+
+<!-- 全屏覆盖层（结构调整） -->
+<div id="introOverlay">
+  <div class="intro-center">
+    <div class="intro-title">CrackPost Visualization</div>
+    <button id="introSelectBtn">选择 email 目录</button>
+
+    <div class="intro-progress-wrap">
+      <div class="intro-progress-grid" id="introProgressGrid"></div>
+    </div>
+
+    <div class="intro-lines" id="introLines"></div>
+  </div>
+</div>
+
+<script>
+/* 覆盖原自动初始化：仅在引导结束后调用（脚本逻辑增强） */
+window.__preloadedData = null;
+
+(function () {
+  const origFetch = window.fetch.bind(window);
+  let localFilesMap = null;
+
+  function normPath(p){return String(p||'').replace(/\\/g,'/').replace(/^\.\/+/,'').replace(/^\/+/,'').replace(/\/+/g,'/');}
+  function guessContentType(p){
+    p=p.toLowerCase();
+    if(p.endsWith('.tsv'))return 'text/tab-separated-values; charset=utf-8';
+    if(p.endsWith('.txt'))return 'text/plain; charset=utf-8';
+    return 'text/plain; charset=utf-8';
+  }
+
+  // 引导界面元素
+  const overlay=document.getElementById('introOverlay');
+  const selectBtn=document.getElementById('introSelectBtn');
+  const progressWrap=document.querySelector('.intro-progress-wrap');
+  const progressGrid=document.getElementById('introProgressGrid');
+  const linesBox=document.getElementById('introLines');
+
+  const PROG_SQUARES = 20;
+  function buildSquares(){
+    progressGrid.innerHTML = '';
+    for(let i=0;i<PROG_SQUARES;i++){
+      const s=document.createElement('div');
+      s.className='sq';
+      progressGrid.appendChild(s);
+    }
+  }
+  function setProgress(p){ // p: 0~1
+    const squares = progressGrid.children;
+    const active = Math.max(0, Math.min(PROG_SQUARES, Math.floor(PROG_SQUARES * p)));
+    for(let i=0;i<squares.length;i++) squares[i].classList.toggle('on', i < active);
+  }
+
+  async function enableLocalEmailDirMode(){
+    return new Promise(resolve=>{
+      const input=document.createElement('input');
+      input.type='file'; input.webkitdirectory=true; input.multiple=true; input.style.display='none';
+      document.body.appendChild(input);
+      input.addEventListener('change', async e=>{
+        try{
+          const files=Array.from(e.target.files||[]);
+          if(!files.length){alert('未选择任何文件'); resolve(false); return;}
+          const map=new Map();
+          files.forEach(f=>{
+            const rel=f.webkitRelativePath||f.name;
+            const key=normPath(rel).toLowerCase();
+            map.set(key,f);
+            if(!key.startsWith('email/')) map.set(('email/'+key).toLowerCase(), f);
+            else map.set(key.replace(/^email\//,''), f);
+          });
+          if(!map.has('email/global_result.tsv') && !map.has('global_result.tsv')){
+            alert('请选择包含 email/global_result.tsv 的目录（请直接选中 email 文件夹）');
+            resolve(false); return;
+          }
+          localFilesMap=map;
+
+          // 拦截 fetch
+          window.fetch=async function(resource,init){
+            try{
+              let url=typeof resource==='string'?resource:(resource&&resource.url)||'';
+              let key=url.replace(/^file:\/+/, '').split('?')[0].split('#')[0];
+              key=normPath(key).toLowerCase();
+              if(key.startsWith('./')) key=key.slice(2);
+              if(key.startsWith('.')) key=key.slice(1);
+              if(key.startsWith('/')) key=key.slice(1);
+              if(!key.startsWith('email/') && key.indexOf('/email/')>=0)
+                key=key.slice(key.indexOf('/email/')+1);
+              if(localFilesMap && localFilesMap.has(key)){
+                const file=localFilesMap.get(key);
+                const text=await file.text();
+                return new Response(text,{status:200,headers:{'Content-Type':guessContentType(key)}});
+              }
+            }catch(e){ console.debug('[local-fetch fallback]', e); }
+            return origFetch(resource,init);
+          };
+
+          // 预加载并启动引导
+          window.loadEmailData().then(d=>{
+            window.__preloadedData=d;
+            startIntroTyping(d);
+            resolve(true);
+          }).catch(err=>{
+            console.error('预加载失败', err);
+            resolve(false);
+          });
+        }finally{ input.remove(); }
+      });
+      input.click();
+    });
+  }
+
+  selectBtn.addEventListener('click', async()=>{ await enableLocalEmailDirMode(); });
+
+  function formatDate(dStr){
+    const d=new Date(dStr); if(isNaN(d)) return dStr;
+    const y=d.getFullYear(), m=('0'+(d.getMonth()+1)).slice(-2), da=('0'+d.getDate()).slice(-2);
+    return `${y}年${m}月${da}日`;
+  }
+
+  function startIntroTyping(data){
+    selectBtn.style.display='none';
+    progressWrap.style.display='flex';
+    buildSquares();
+    setProgress(0);
+    linesBox.innerHTML='';
+
+    const ocSet = new Set((data.ocData||[]).map(o => (o.name||'').trim()).filter(Boolean));
+    const { usersData } = processEmailData(data.ocData || [], data.emailData || []);
+    const userCount = usersData.length;
+    const letterCount = (data.emailData||[]).length;
+    const dates=[...(data.ocData||[]).map(o=>o.registerDate),...(data.emailData||[]).map(e=>e.date)]
+      .filter(Boolean).sort();
+    const minD=dates.length?dates[0]:new Date().toISOString().slice(0,10);
+    const maxD=dates.length?dates[dates.length-1]:minD;
+
+    const lines=[
+      `正在检索从 ${formatDate(minD)} 到 ${formatDate(maxD)} 的通信记录`,
+      `正在联系 ${userCount} 位笔友`,
+      `正在邮递 ${letterCount} 封信`,
+      `Crackpost可视化即将启动，请稍候...`
+    ];
+
+    // ===== 新增：时间驱动进度条（均匀推进） =====
+    const charDelay = 55;       // 单字符打字延时 (ms) 可再调慢
+    const linePause = 700;     // 每行完成后的停顿 (ms)
+    const perLineCharCounts = lines.map(l => l.length);
+    // 总时长 = Σ(字符数*charDelay) + 行间停顿(最后一行无停顿)
+    const totalDuration =
+      perLineCharCounts.reduce((sum,c)=>sum + c*charDelay,0) +
+      linePause * (lines.length - 1);
+
+    let typingDone = false;
+    let timeDone = false;
+    const startTs = performance.now();
+
+    function progressLoop(){
+      const elapsed = performance.now() - startTs;
+      let p = Math.min(1, elapsed / totalDuration);
+      setProgress(p);
+      if(p >= 1){
+        timeDone = true;
+        tryFinish();
+        return;
+      }
+      requestAnimationFrame(progressLoop);
+    }
+    progressLoop();
+
+    function tryFinish(){
+      if(typingDone && timeDone){
+        // 与原 finishIntro 行为一致
+        setTimeout(()=>{
+          overlay.classList.add('fade-out');
+          setTimeout(()=>{
+            overlay.remove();
+            if(window.__preloadedData) initVisualizationWithPreloaded(window.__preloadedData);
+            else initVisualization();
+          },800);
+        },300);
+      }
+    }
+
+    let lineIndex=0;
+    function writeLine(){
+      if(lineIndex>=lines.length){
+        typingDone = true;
+        tryFinish();
+        return;
+      }
+      linesBox.innerHTML='';
+      const text=lines[lineIndex];
+      const lineDiv=document.createElement('div');
+      lineDiv.className='intro-line';
+      linesBox.appendChild(lineDiv);
+
+      let ci=0;
+      (function typeChar(){
+        if(ci>=text.length){
+          lineIndex++;
+          setTimeout(writeLine, linePause);
+          return;
+        }
+        const span=document.createElement('span');
+        span.className='char';
+        span.textContent=text[ci];
+        lineDiv.appendChild(span);
+        ci++;
+        setTimeout(typeChar, charDelay);
+      })();
+    }
+    writeLine();
+  }
+
+
+  // 用预加载数据初始化（原逻辑保持不变）
+  function initVisualizationWithPreloaded(d){
+    const { ocData,emailData }=d;
+    const processed=buildVisualizationData(ocData,emailData);
+    const { usersData, lettersData } = processed;
+    let { minDate, maxDate } = computeTimeState(usersData, lettersData);
+    const dateState={current:new Date(minDate)};
+    const { container, canvas, ctx, DPR, tooltip, resizeCanvas, width, height }=setupCanvasAndTooltip();
+    const dateExtent=d3.extent(usersData,d=>new Date(d.registerDate));
+    const timeScale=d3.scaleTime().domain(dateExtent).range([width*0.1,width*0.9]);
+    const { nodes,nodeById,getNodeByName,nodeJitter }=buildNodesData(usersData,timeScale,height);
+    const links=buildLinksData(lettersData,nodeById);
+    const senderRings=buildSenderRings(emailData);
+    const particles=initParticles(links);
+    const pulseRings=initPulseRings(nodes);
+    initStars(canvas,width,height);
+    const getDisplayPos=createGetDisplayPos();
+    const computeQuadraticControl=createComputeQuadraticControl();
+    const distancePointToQuadratic=createDistancePointToQuadratic();
+    let view=createInitialView();
+    view=computeInitialLayout(nodes,links,timeScale,view,width,height,300);
+    const interactionState={canvas,nodes,links,view,tooltip,senderRings,nodeById,getDisplayPos,computeQuadraticControl,distancePointToQuadratic,width,height,dateState};
+    const interactionHandlers=setupInteractions(interactionState);
+    const renderState={canvas,ctx,DPR,view,nodes,links,lettersData,nodeById,senderRings,pulseRings,particles,nodeJitter,dateState,minDate,getDisplayPos,getNodeByName,computeQuadraticControl,interactionHandlers};
+    const onTick=createRenderLoop(renderState);
+    (function loop(){onTick();requestAnimationFrame(loop);})();
+
+    initEmailPopupSystem();
+    setupClickHandlers(canvas,interactionHandlers);
+    setupCanvasEvents(canvas,nodes,view,width,height,tooltip);
+
+    const timeSlider=document.getElementById('timeSlider');
+    const timeDisplay=document.getElementById('timeDisplay');
+    const playButton=document.getElementById('playButton');
+    const resetButton=document.getElementById('resetButton');
+    const speedOptions=document.querySelectorAll('.speed-option');
+    const filterByDate=createFilterByDate(nodes,links,emailData,ocData,nodeById,()=>interactionHandlers.getHoveredNode(),tooltip);
+    setupTimeControls({minDate,maxDate,dateState,timeSlider,timeDisplay,playButton,resetButton,speedOptions,filterByDate,onTick});
+    dateState.current=new Date(minDate);
+    if(timeSlider) timeSlider.value=0;
+    filterByDate(dateState.current);
+  }
+
+  // 禁止自动加载，等待用户选择
+  document.removeEventListener('DOMContentLoaded', initVisualization);
+})();
+</script>
+
+
+<script>
+/* 在文件末尾现有 <script> 中追加以下内容 */
+
+(function () {
+    const origFetch = window.fetch.bind(window);
+    let localFilesMap = null;
+
+    function normPath(p) {
+        return String(p || '')
+            .replace(/\\/g, '/')
+            .replace(/^\.\/+/, '')
+            .replace(/^\/+/, '')
+            .replace(/\/+/g, '/');
+    }
+
+    function guessContentType(p) {
+        p = p.toLowerCase();
+        if (p.endsWith('.tsv')) return 'text/tab-separated-values; charset=utf-8';
+        if (p.endsWith('.txt')) return 'text/plain; charset=utf-8';
+        return 'text/plain; charset=utf-8';
+    }
+
+    // 选择目录，构建文件映射，并拦截 fetch
+    async function enableLocalEmailDirMode() {
+        return new Promise((resolve) => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.webkitdirectory = true;
+            input.multiple = true;
+            input.style.display = 'none';
+            document.body.appendChild(input);
+
+            input.addEventListener('change', async (e) => {
+                try {
+                    const files = Array.from(e.target.files || []);
+                    if (!files.length) {
+                        alert('未选择任何文件');
+                        resolve(false);
+                        return;
+                    }
+                    // 建立映射（大小写不敏感；为方便匹配，同时映射 email/ 前缀和无前缀两种）
+                    const map = new Map();
+                    files.forEach(f => {
+                        const rel = f.webkitRelativePath || f.name;
+                        const key = normPath(rel).toLowerCase();           // 如: email/收/20250101_.../content.txt 或 global_result.tsv
+                        map.set(key, f);
+                        if (!key.startsWith('email/')) {
+                            map.set(('email/' + key).toLowerCase(), f);   // 兼容请求以 email/ 开头
+                        } else {
+                            map.set(key.replace(/^email\//, ''), f);      // 兼容请求不带 email/ 前缀
+                        }
+                    });
+
+                    // 校验是否含 global_result.tsv
+                    if (!map.has('email/global_result.tsv') && !map.has('global_result.tsv')) {
+                        alert('请选择包含 email/global_result.tsv 的目录（请直接选中“email”文件夹）');
+                        resolve(false);
+                        return;
+                    }
+
+                    localFilesMap = map;
+
+                    // 拦截 fetch：命中本地映射时直接返回 Response，否则走原始 fetch
+                    window.fetch = async function(resource, init) {
+                        try {
+                            let url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
+                            // 仅拦截 email 路径相关
+                            let key = url;
+                            // 去掉 file:// 前缀与查询串、hash
+                            key = key.replace(/^file:\/+/, '');
+                            key = key.split('?')[0].split('#')[0];
+                            // 相对路径规范化
+                            key = normPath(key).toLowerCase();
+                            // 常见相对形式归一
+                            if (key.startsWith('./')) key = key.slice(2);
+                            if (key.startsWith('.')) key = key.slice(1);
+                            if (key.startsWith('/')) key = key.slice(1);
+
+                            // 特别照顾 ./email/... / email/... 两种
+                            if (!key.startsWith('email/')) {
+                                if (key.indexOf('/email/') >= 0) {
+                                    key = key.slice(key.indexOf('/email/') + 1); // 去前缀变为 email/...
+                                }
+                            }
+
+                            if (localFilesMap && localFilesMap.has(key)) {
+                                const file = localFilesMap.get(key);
+                                const text = await file.text();
+                                return new Response(text, {
+                                    status: 200,
+                                    headers: { 'Content-Type': guessContentType(key) }
+                                });
+                            }
+                        } catch (err) {
+                            console.debug('[local-fetch] 拦截异常，回退原始 fetch', err);
+                        }
+                        return origFetch(resource, init);
+                    };
+
+                    // 清空已有画布，避免重复叠加
+                    const viz = document.getElementById('visualization');
+                    if (viz) while (viz.firstChild) viz.removeChild(viz.firstChild);
+                    const tooltip = document.querySelector('.tooltip');
+                    if (tooltip) { tooltip.style.display = 'none'; }
+
+                    // 复用原有流程
+                    initVisualization();
+                    resolve(true);
+                } catch (err) {
+                    console.error('[local] 启用本地目录模式失败', err);
+                    alert('启用本地目录模式失败，请查看控制台');
+                    resolve(false);
+                } finally {
+                    input.remove();
+                }
+            });
+
+            input.click();
+        });
+    }
+
+    // 测试按钮（先不管位置，固定在右上角）
+    const btn = document.createElement('button');
+    btn.id = 'pickLocalEmailDirBtn';
+    btn.textContent = '加载本地 email 目录（测试）';
+    btn.style.position = 'fixed';
+    btn.style.right = '12px';
+    btn.style.top = '12px';
+    btn.style.zIndex = '3000';
+    btn.style.padding = '6px 10px';
+    btn.style.background = 'rgba(0, 120, 180, 0.5)';
+    btn.style.color = '#dff';
+    btn.style.border = '1px solid rgba(0,200,255,0.5)';
+    btn.style.borderRadius = '6px';
+    btn.onclick = () => enableLocalEmailDirMode();
+    document.addEventListener('DOMContentLoaded', () => document.body.appendChild(btn));
+})();
 </script>
 
 </html>

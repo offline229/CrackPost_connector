@@ -29,11 +29,9 @@ import imaplib, ssl, sys
 # 	统计所有收信
 # 	第一步，对所有有明确的发件人 收件人的收信，检索其是否在contenttxt中带有附件 的字样	
 # 	若有，则找到
-# 处理掉对#的错误支持 135 195
 # 允许配置下载位置
 # 增加错误处理
 # 增加日志
-# 不匹配结果显示且仅显示满足收发件邮箱地址条件的，也就是即使不匹配，也必须是收发地址正确但格式不正确的
 # 增加未匹配手动加入功能
 # 增加html界面的手动打开功能
 # 下载时，发件可能是A B C某人 
@@ -57,10 +55,17 @@ import imaplib, ssl, sys
 #     download_gui.py
 
 # ==================== 日志配置（全局，仅一次）====================
-script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+# 兼容 py 脚本和 PyInstaller 打包后的 exe
+# 全局只获取一次
+if getattr(sys, 'frozen', False):
+    script_dir = Path(sys.executable).parent
+else:
+    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+
 log_dir = script_dir / "log"
 log_dir.mkdir(exist_ok=True, parents=True)
 
+import logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -72,12 +77,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class EmailDownloader:
-
     def __init__(self, config_file=None):
         """初始化邮件下载器"""
-        # 获取脚本所在目录，确保配置文件保存在正确位置
-        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-        # 存储目录
+        # 直接用全局的 script_dir
         self.base_dir = script_dir / "email"
         self.base_dir.mkdir(exist_ok=True, parents=True)
         # 日志目录（已在文件顶部初始化，此处仅备份）
@@ -96,8 +98,6 @@ class EmailDownloader:
         self.imap_server = self.config.get('Servers', 'imap_server', fallback='')
         self.imap_port = int(self.config.get('Servers', 'imap_port', fallback='993'))
         
-        # 搜索规则 - 默认为 A数字 模式
-        self.search_pattern = self.config.get('Filters', 'search_pattern', fallback=r'A\d+')
         
         # 创建基本目录 - 现在指向系统根目录下的email文件夹
         self.base_dir = script_dir / "email"
@@ -180,128 +180,59 @@ class EmailDownloader:
         return email_dir
 
     def _email_already_downloaded(self, email_info):
-        """判断邮件是否已完整下载：
-        1. 对于当前要下载的email，解析info，并从 TSV 中查找匹配的已下载记录
-        2. 验证该路径下 content.txt 存在且完整
-        3. 验证附件（如果有）存在
-        4. 决定是否下载
+        """判断邮件是否已完整下载（仅检查本地文件）
+        
+        Args:
+            email_info: 邮件信息字典
+            
+        Returns:
+            tuple: (是否已下载, 目录路径, 原因)
         """
-        global_result_path = self.base_dir / "global_result.tsv"
-        if not global_result_path.exists():
-            return False, "", "TSV 不存在"
-
-        # 1. 读取 TSV，构建已下载邮件的索引
-        existing_mails = {}  # key: (sender, date, letter_type), value: directory_path
-        try:
-            with open(global_result_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            for line in lines[2:]:  # 跳过前两行（OC 和表头）
-                cols = line.strip().split('\t')
-                if len(cols) < 6:
-                    continue
-                sender = cols[2].strip()
-                date = cols[1].strip()
-                letter_type = cols[4].strip()
-                directory = cols[5].strip()
-                
-                # 构建索引键
-                key = (sender, date, letter_type)
-                existing_mails[key] = directory
-        except Exception as e:
-            logger.debug(f"读取 TSV 失败: {e}")
-            return False, "", f"读取 TSV 出错: {str(e)}"
-
-        # 2. 从 email_info 中提取关键字段
-        current_email = self.email_addr.lower()
-        sender_email = (email_info.get('sender') or '').strip()
-        
-        # 解析发件人名称（从 content.txt 或主题中提取）
-        sender_name = ""
-        subject = email_info.get('subject', '').replace(' ', '')
-        
-        # 尝试从主题中提取信件类型
-        letter_type = self.extract_letter_type(subject)
-        
-        # 解析日期
-        date_str = email_info.get('date', '')
-        try:
-            date_obj = email.utils.parsedate_to_datetime(date_str)
-            date_short = date_obj.strftime("%Y-%m-%d")
-        except:
-            date_short = date_str[:10] if len(date_str) >= 10 else ""
-
-        # 3. 如果已有目录，优先从 content.txt 中读取发件人
+        # 1. 计算预期存储路径
         email_dir = self._expected_email_dir(email_info)
+        
+        # 2. 检查目录是否存在
+        if not email_dir.exists():
+            return False, str(email_dir), "目录不存在"
+        
+        # 3. 检查 content.txt 是否存在
         content_file = email_dir / "content.txt"
-        if content_file.exists():
-            try:
-                with open(content_file, "r", encoding="utf-8") as cf:
-                    content = cf.read()
-                    m = re.search(r"发件[人x]=【(.+?)】", content)
-                    if m:
-                        sender_name = m.group(1).strip()
-            except Exception:
-                pass
+        if not content_file.exists():
+            return False, str(email_dir), "content.txt 不存在"
         
-        # 如果没有从 content.txt 中提取到，尝试从主题中提取
-        if not sender_name:
-            m = re.search(r"来自(.+?)的信", subject)
-            if m:
-                sender_name = m.group(1).strip()
-        
-        # 兜底：用邮箱地址
-        if not sender_name:
-            sender_name = sender_email.split('@')[0] if sender_email else "未知"
-
-        # 4. 在 TSV 索引中查找
-        key = (sender_name, date_short, letter_type)
-        if key not in existing_mails:
-            logger.debug(f"TSV 中未找到: {key}")
-            return False, str(email_dir), "TSV 中无匹配记录"
-
-        # 5. 找到匹配，验证文件完整性
-        tsv_directory = existing_mails[key]
-        
-        # 转换相对路径为绝对路径
-        project_root = Path(os.path.dirname(os.path.abspath(__file__))).resolve()
-        if tsv_directory.startswith('.\\'):
-            tsv_directory = tsv_directory[2:]
-        tsv_dir_path = project_root / tsv_directory.replace('\\', os.sep)
-        
-        if not tsv_dir_path.exists() or not tsv_dir_path.is_dir():
-            logger.debug(f"TSV 记录的目录不存在: {tsv_dir_path}")
-            return False, str(tsv_dir_path), "TSV 记录的目录不存在"
-        
-        content_file = tsv_dir_path / "content.txt"
-        if not content_file.exists() or not content_file.is_file():
-            logger.debug(f"content.txt 不存在: {tsv_dir_path}")
-            return False, str(tsv_dir_path), "content.txt 缺失"
-        
+        # 4. 检查 content.txt 文件大小
         try:
             file_size = content_file.stat().st_size
             if file_size <= 100:
-                return False, str(tsv_dir_path), "content.txt 文件过小"
-            
+                return False, str(email_dir), "content.txt 文件过小"
+        except Exception as e:
+            return False, str(email_dir), f"检查文件大小失败: {e}"
+        
+        # 5. 检查必要字段
+        try:
             with open(content_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # 检查必要字段
                 required_fields = ["主题:", "发件邮箱:", "收件邮箱:", "日期:"]
                 missing_fields = [field for field in required_fields if field not in content]
                 if missing_fields:
-                    return False, str(tsv_dir_path), f"content.txt 缺少字段: {', '.join(missing_fields)}"
-            
-            # 检查附件（如果 email_info 标记有附件）
-            has_attachments = email_info.get('has_attachments', False)
-            if has_attachments:
-                files_in_dir = [f for f in tsv_dir_path.iterdir() if f.is_file() and f.name != 'content.txt']
-                if not files_in_dir:
-                    return False, str(tsv_dir_path), "附件缺失"
-            
-            logger.info(f"邮件已完整下载（TSV验证）: {tsv_dir_path}")
-            return True, str(tsv_dir_path), "已完整（TSV验证）"
+                    return False, str(email_dir), f"content.txt 缺少字段: {', '.join(missing_fields)}"
         except Exception as e:
-            logger.debug(f"检查文件时出错: {e}")
-            return False, str(tsv_dir_path), f"检查出错: {str(e)}"  
+            return False, str(email_dir), f"读取 content.txt 失败: {e}"
+        
+        # 6. 检查附件（如果标记有附件）
+        has_attachments = email_info.get('has_attachments', False)
+        if has_attachments:
+            # 统计非 content.txt 的文件数
+            try:
+                files_in_dir = [f for f in email_dir.iterdir() if f.is_file() and f.name != 'content.txt']
+                if not files_in_dir:
+                    return False, str(email_dir), "附件缺失"
+            except Exception as e:
+                return False, str(email_dir), f"检查附件失败: {e}"
+        
+        # 7. 所有检查通过
+        logger.info(f"邮件已完整下载（本地验证）: {email_dir}")
+        return True, str(email_dir), "已完整（本地验证）"
 
     # 这里的规则负责搜索，只要搜到即可
     def get_default_rule(self, rule_num=1):
@@ -393,10 +324,6 @@ class EmailDownloader:
                 'imap_port': '993',
             }
             
-            config['Filters'] = {
-                'search_pattern': r'A\d+',
-            }
-            
             config['Storage'] = {
                 'base_directory': os.path.join(os.path.expanduser('~'), 'email')
             }
@@ -441,10 +368,6 @@ class EmailDownloader:
         self.config['Servers'] = {
             'imap_server': self.imap_server,
             'imap_port': str(getattr(self, 'imap_port', 993)),
-        }
-        
-        self.config['Filters'] = {
-            'search_pattern': self.search_pattern,
         }
         
         self.config['Storage'] = {
@@ -576,10 +499,27 @@ class EmailDownloader:
             return []
     
     def search_emails_advanced(self, folder, subject_pattern=None, from_address=None,
-                              to_address=None, start_date=None, end_date=None, 
-                              callback=None, max_emails=None):
+                            to_address=None, start_date=None, end_date=None, 
+                            callback=None, max_emails=None):
         """高级邮件搜索，支持多种条件和分页"""
+        
+        # ✅ 新增：检查连接状态，如果连接失效则重新连接
         if not self.client:
+            logger.warning("客户端为空，正在重新连接...")
+            if not self.connect_to_email():
+                return []
+        
+        # ✅ 新增：尝试发送 NOOP 命令检查连接是否仍然有效
+        try:
+            self.client.noop()  # 发送 NOOP 保活命令
+            logger.debug("连接检查: OK")
+        except Exception as e:
+            logger.warning(f"连接已失效，正在重新连接: {e}")
+            try:
+                self.client.logout()
+            except Exception:
+                pass
+            self.client = None
             if not self.connect_to_email():
                 return []
                 
@@ -708,22 +648,48 @@ class EmailDownloader:
             matched_emails.sort(key=lambda x: x['date_obj'] if x['date_obj'] else datetime.min, reverse=True)
             
             logger.info(f"成功找到 {len(matched_emails)} 封匹配邮件")
-
-            # debug输出：显示前20个未匹配邮件的主题
+            # debug输出：显示未匹配邮件的主题（仅收发件邮箱地址正确但主题不匹配）
             unmatched = []
             if subject_pattern:
                 for msg_id in msg_ids:
                     # 检查是否已在matched_emails
                     if not any(e['id'] == msg_id for e in matched_emails):
-                        # 获取原始邮件主题
+                        # 获取邮件信息
                         try:
                             response = self.client.fetch([msg_id], ['ENVELOPE'])
                             envelope = response[msg_id][b'ENVELOPE']
                             subject = self.decode_mime_header(envelope.subject.decode()) if envelope.subject else ""
                             subject = subject.replace(' ', '')  # 入口处去空格
-                            unmatched.append(subject)
+                            
+                            # 检查发件人
+                            sender = ""
+                            if envelope.from_ and len(envelope.from_) > 0:
+                                sender = envelope.from_[0].mailbox.decode() + '@' + envelope.from_[0].host.decode()
+                            
+                            # 检查收件人
+                            recipients = []
+                            if envelope.to:
+                                for recipient in envelope.to:
+                                    if recipient.mailbox and recipient.host:
+                                        email_addr = recipient.mailbox.decode() + '@' + recipient.host.decode()
+                                        recipients.append(email_addr)
+                            
+                            # 验证邮箱地址条件
+                            sender_ok = True
+                            recipient_ok = True
+                            if from_address:
+                                from_list = [x.strip() for x in from_address.split(",") if x.strip()]
+                                sender_ok = any(f in sender for f in from_list)
+                            if to_address:
+                                to_list = [x.strip() for x in to_address.split(",") if x.strip()]
+                                recipient_ok = any(any(t in r for t in to_list) for r in recipients)
+                            
+                            # 只有邮箱地址正确但主题不匹配的才加入 unmatched
+                            if sender_ok and recipient_ok:
+                                unmatched.append(subject)
+                                
                         except Exception as e:
-                            unmatched.append(f"[无法获取主题] id={msg_id}")
+                            logger.debug(f"处理未匹配邮件时出错 id={msg_id}: {e}")
 
                 logger.info(f"总邮件数: {len(msg_ids)}")
                 logger.info(f"匹配当前规则邮件数: {len(matched_emails)}")
@@ -732,6 +698,7 @@ class EmailDownloader:
                     logger.info(f"未匹配邮件数量: {len(unmatched)}，前{min(300, len(unmatched))}个主题如下：")
                     for i, subj in enumerate(unmatched[:300]):
                         print(f"[未匹配{i+1}] {subj}")
+                        
             # 保存未匹配列表以便 GUI 弹窗展示
             self.last_unmatched = unmatched
             return matched_emails
@@ -740,199 +707,363 @@ class EmailDownloader:
             logger.error(f"搜索邮件时出错: {str(e)}")
             return []
 
+
+    # ========== 1. 获取原始邮件数据 ==========
+
+    def ensure_connected(self, max_retries=2, backoff=1):
+        """确保 IMAP 连接可用；不可用时自动重连并重试（返回 True/False）"""
+        for attempt in range(1, max_retries + 1):
+            try:
+                if not self.client:
+                    logger.info("IMAP 客户端为空，尝试连接...")
+                    if self.connect_to_email():
+                        return True
+                    else:
+                        logger.warning("connect_to_email 失败")
+                else:
+                    try:
+                        # 发送 NOOP 保活检测
+                        self.client.noop()
+                        return True
+                    except Exception as e:
+                        logger.warning(f"连接检测失败（尝试 {attempt}/{max_retries}）：{e}")
+                        try:
+                            self.client.logout()
+                        except Exception:
+                            pass
+                        self.client = None
+                        if self.connect_to_email():
+                            return True
+            except Exception as e:
+                logger.warning(f"ensure_connected 异常: {e}")
+            # 指数回退
+            time.sleep(backoff * attempt)
+        logger.error("无法建立有效的 IMAP 连接（ensure_connected 失败）")
+        return False
+
+    def _fetch_raw_email(self, email_id, folder):
+        """获取原始邮件数据（带重连与重试逻辑）
+
+        Returns:
+            tuple: (email.message.Message对象, 错误信息)
+        """
+        try:
+            # 先确保连接可用
+            if not self.ensure_connected():
+                return None, "无法连接到邮箱（ensure_connected 失败）"
+
+            # 选择文件夹（EXAMINE -> SELECT 回退），遇到错误尝试重连一次
+            try:
+                self.client.select_folder(folder, readonly=True)
+            except Exception as e:
+                logger.warning(f"EXAMINE 失败，尝试重连并回退为 SELECT: {e}")
+                try:
+                    self.client.logout()
+                except Exception:
+                    pass
+                self.client = None
+                if not self.ensure_connected():
+                    return None, f"选择文件夹失败: 无法重连 ({e})"
+                try:
+                    self.client.select_folder(folder, readonly=False)
+                except Exception as e2:
+                    return None, f"选择文件夹失败: {str(e2)}"
+
+            # 获取邮件（fetch），fetch 失败时重连并重试一次
+            try:
+                fetch_data = self.client.fetch([email_id], ['RFC822'])
+                if not fetch_data or email_id not in fetch_data:
+                    return None, f"获取邮件 {email_id} 失败"
+            except Exception as e:
+                logger.warning(f"fetch 失败，尝试重连并重试: {e}")
+                try:
+                    self.client.logout()
+                except Exception:
+                    pass
+                self.client = None
+                if not self.ensure_connected():
+                    return None, f"获取邮件失败: 无法重连 ({e})"
+                try:
+                    fetch_data = self.client.fetch([email_id], ['RFC822'])
+                    if not fetch_data or email_id not in fetch_data:
+                        return None, f"获取邮件 {email_id} 失败（重试）"
+                except Exception as e2:
+                    return None, f"获取邮件失败: {str(e2)}"
+
+            raw_email = fetch_data[email_id][b'RFC822']
+            msg = email.message_from_bytes(raw_email)
+            return msg, None
+
+        except Exception as e:
+            return None, f"获取邮件时出错: {str(e)}"
+
+    # ========== 2. 解析基本元数据 ==========
+    def _parse_email_metadata(self, msg):
+        """解析邮件的基本元数据
+        
+        Returns:
+            dict: {'subject', 'sender', 'date_str', 'date_folder'}
+        """
+        metadata = {}
+        
+        # 主题
+        subject = self.decode_mime_header(msg['subject'] or '')
+        metadata['subject'] = subject.replace(' ', '')
+        
+        # 发件人
+        metadata['sender'] = email.utils.parseaddr(msg['from'])[1]
+        
+        # 日期
+        date_str = msg['date'] or ''
+        metadata['date_str'] = date_str
+        
+        try:
+            date_obj = email.utils.parsedate_to_datetime(date_str)
+            metadata['date_folder'] = date_obj.strftime("%Y%m%d")
+        except:
+            metadata['date_folder'] = "unknown_date"
+        
+        return metadata
+    
+    # ========== 3. 确定存储目录 ==========
+    def _determine_email_directory(self, metadata):
+        """确定邮件存储目录
+        
+        Returns:
+            Path: 邮件存储目录路径
+        """
+        current_email = self.email_addr.lower()
+        sender = metadata['sender']
+        send_type = "发" if sender.lower() == current_email else "收"
+        
+        subject = metadata['subject'][:30]
+        safe_subject = self._safe_filename(subject)
+        
+        email_dir = self.base_dir / send_type / f"{metadata['date_folder']}_{safe_subject}"
+        email_dir.mkdir(parents=True, exist_ok=True)
+        
+        return email_dir
+    
+    # ========== 4. 解析收件人 ==========
+    def _parse_recipients(self, msg):
+        """解析收件人列表
+        
+        Returns:
+            list: 收件人名称列表
+        """
+        to_addrs = []
+        try:
+            addrs = email.utils.getaddresses(
+                msg.get_all('To', []) + msg.get_all('Cc', [])
+            )
+            for name, addr in addrs:
+                if name and name.strip():
+                    decoded_name = self.decode_mime_header(name.strip())
+                    to_addrs.append(decoded_name)
+                elif addr:
+                    local = addr.split('@')[0]
+                    to_addrs.append(local)
+        except Exception as e:
+            logger.warning(f"解析收件人失败: {e}")
+        
+        return to_addrs
+    
+    # ========== 5. 提取邮件正文 ==========
+    def _extract_email_body(self, msg):
+        """提取邮件正文(优先纯文本,备选HTML)
+        
+        Returns:
+            str: 邮件正文文本
+        """
+        body_text = ""
+        found_body = False
+        
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            content_disp = str(part.get("Content-Disposition"))
+            
+            # 优先纯文本
+            if content_type == "text/plain" and "attachment" not in content_disp:
+                charset = part.get_content_charset()
+                try:
+                    if charset:
+                        body_text = part.get_payload(decode=True).decode(charset, errors='replace')
+                    else:
+                        body_text = part.get_payload(decode=True).decode(errors='replace')
+                    logger.debug(f"原始纯文本正文: {repr(body_text[:100])}")
+                except:
+                    body_text = "无法解码邮件内容"
+                found_body = True
+                break
+            
+            # 备选 HTML
+            elif content_type == "text/html" and "attachment" not in content_disp and not found_body:
+                charset = part.get_content_charset()
+                try:
+                    if charset:
+                        html_text = part.get_payload(decode=True).decode(charset, errors='replace')
+                    else:
+                        html_text = part.get_payload(decode=True).decode(errors='replace')
+                    
+                    logger.debug(f"原始HTML正文: {repr(html_text[:100])}")
+                    
+                    # HTML转文本
+                    html_text = re.sub(r'(<br\s*/?>|<p>|</p>|<div[^>]*>|</div>)', '\n', html_text, flags=re.IGNORECASE)
+                    html_text = html_text.replace('&nbsp;', ' ')
+                    body_text = re.sub('<[^<]+?>', '', html_text)
+                    body_text = re.sub(r'\n+', '\n', body_text)
+                    
+                    logger.debug(f"最终处理后的正文: {repr(body_text[:100])}")
+                    found_body = True
+                except:
+                    body_text = "无法解码 HTML 邮件内容"
+                    found_body = True
+        
+        return body_text
+    
+    # ========== 6. 下载附件 ==========
+    def _download_attachments(self, msg, email_dir, email_id):
+        """下载所有附件
+        
+        Returns:
+            tuple: (附件路径列表, 错误信息列表)
+        """
+        attachment_paths = []
+        attachment_errors = []
+        
+        for part in msg.walk():
+            content_disp = str(part.get("Content-Disposition"))
+            
+            if "attachment" in content_disp or part.get_filename():
+                filename = part.get_filename()
+                if filename:
+                    if isinstance(filename, bytes):
+                        filename = filename.decode(errors='replace')
+                    filename = self.decode_mime_header(filename)
+                    filename = re.sub(r'[\\/:*?"<>|]', '_', filename)
+                    
+                    if not filename or filename.strip() == "":
+                        filename = f"attachment_{email_id}_{int(time.time())}.bin"
+                    
+                    file_path = email_dir / filename
+                    try:
+                        with open(file_path, 'wb') as f:
+                            payload = part.get_payload(decode=True)
+                            if payload:
+                                f.write(payload)
+                        attachment_paths.append(str(file_path))
+                        logger.info(f"保存附件: {file_path}")
+                    except Exception as e:
+                        error_msg = f"保存附件 {filename} 失败: {str(e)}"
+                        logger.error(error_msg)
+                        attachment_errors.append(error_msg)
+        
+        return attachment_paths, attachment_errors
+    
+    # ========== 7. 保存 content.txt ==========
+    def _save_content_file(self, email_dir, metadata, to_addrs, body_text):
+        """保存 content.txt 文件
+        
+        Returns:
+            tuple: (成功标志, 错误信息)
+        """
+        content_file = email_dir / "content.txt"
+        try:
+            with open(content_file, "w", encoding="utf-8") as f:
+                f.write(f"主题: {metadata['subject']}\n")
+                f.write(f"发件邮箱: {metadata['sender']}\n")
+                f.write(f"收件邮箱: {', '.join(to_addrs)}\n")
+                f.write(f"日期: {metadata['date_str']}\n")
+                f.write("-" * 50 + "\n\n")
+                f.write(body_text if body_text.strip() else "[邮件内容为空或无法解析]")
+            logger.info(f"已保存 content.txt: {content_file}")
+            return True, None
+        except Exception as e:
+            error_msg = f"保存 content.txt 失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
+    # ========== 8. 验证下载完整性 ==========
+    def _validate_download(self, email_dir, attachment_errors):
+        """验证下载完整性
+        
+        Returns:
+            tuple: (成功标志, 错误信息)
+        """
+        content_file = email_dir / "content.txt"
+        
+        if not content_file.exists():
+            return False, "content.txt 不存在"
+        
+        if content_file.stat().st_size <= 100:
+            return False, "content.txt 文件过小"
+        
+        if attachment_errors:
+            return False, "; ".join(attachment_errors)
+        
+        return True, None
+    
+    # ========== 9. 主流程协调器 ==========
     def download_email(self, email_id, folder):
-        """下载单个邮件，增强验证和错误处理"""
+        """下载单个邮件(主流程)
+        
+        Returns:
+            tuple: (result字典, 错误信息)
+        """
         if not self.client:
             if not self.connect_to_email():
                 return None, "连接失败"
 
         try:
-            # 选择文件夹
-            try:
-                self.client.select_folder(folder, readonly=True)
-            except Exception as e:
-                logger.warning(f"EXAMINE 失败，回退为 SELECT: {e}")
-                try:
-                    self.client.select_folder(folder, readonly=False)
-                except Exception as e2:
-                    logger.error(f"选择邮箱文件夹失败: {e2}")
-                    return None, f"选择文件夹失败: {str(e2)}"
-
-            # 获取邮件
-            fetch_data = self.client.fetch([email_id], ['RFC822'])
-            if not fetch_data or email_id not in fetch_data:
-                logger.error(f"获取邮件 {email_id} 失败")
-                return None, "获取邮件失败"
-
-            raw_email = fetch_data[email_id][b'RFC822']
-            msg = email.message_from_bytes(raw_email)
-
-            # 解析基本信息
-            subject = self.decode_mime_header(msg['subject'] or '')
-            subject = subject.replace(' ', '')
-            sender = email.utils.parseaddr(msg['from'])[1]
-            date_str = msg['date'] or ''
-            try:
-                date_obj = email.utils.parsedate_to_datetime(date_str)
-                date_folder = date_obj.strftime("%Y%m%d")
-            except:
-                date_folder = "unknown_date"
-
-            # 判断收/发类型
-            current_email = self.email_addr.lower()
-            send_type = "发" if sender.lower() == current_email else "收"
+            # 1. 获取原始邮件
+            msg, error = self._fetch_raw_email(email_id, folder)
+            if error:
+                return None, error
             
-            def safe_filename(name):
-                return re.sub(r'[\\/:*?"<>|]', '_', name)
-
-            email_dir = self.base_dir / send_type / f"{date_folder}_{safe_filename(subject[:30])}"
-            email_dir.mkdir(parents=True, exist_ok=True)
+            # 2. 解析元数据
+            metadata = self._parse_email_metadata(msg)
             
-            # 解析收件人
-            to_addrs = []
-            try:
-                addrs = email.utils.getaddresses(msg.get_all('To', []) + msg.get_all('Cc', []))
-                for name, addr in addrs:
-                    if name and name.strip():
-                        decoded_name = self.decode_mime_header(name.strip())
-                        to_addrs.append(decoded_name)
-                    elif addr:
-                        local = addr.split('@')[0]
-                        to_addrs.append(local)
-            except Exception:
-                to_addrs = []
-
-# 保持原有的上下文
-
-            # 解析正文部分
-            body_text = ""
-            has_attachments = False
-            attachment_paths = []
-            attachment_errors = []
-            found_body = False
-
-            for part in msg.walk():
-                content_type = part.get_content_type()
-                content_disp = str(part.get("Content-Disposition"))
-
-                # 优先保存纯文本正文
-                if content_type == "text/plain" and "attachment" not in content_disp:
-                    charset = part.get_content_charset()
-                    try:
-                        if charset:
-                            body_text = part.get_payload(decode=True).decode(charset, errors='replace')
-                        else:
-                            body_text = part.get_payload(decode=True).decode(errors='replace')
-                        print("[DEBUG] 原始纯文本正文：", repr(body_text))  # 添加此行
-                    except:
-                        body_text = "无法解码邮件内容"
-                    found_body = True
-                    break
-                
-                # 备选 text/html
-                elif content_type == "text/html" and "attachment" not in content_disp and not found_body:
-                    charset = part.get_content_charset()
-                    try:
-                        if charset:
-                            html_text = part.get_payload(decode=True).decode(charset, errors='replace')
-                        else:
-                            html_text = part.get_payload(decode=True).decode(errors='replace')
-
-                        print("[DEBUG] 原始HTML正文：", repr(html_text))  # 添加此行
-                        
-                        # 日志：输出原始HTML内容
-                        logger.debug(f"原始HTML内容: {html_text}")
-
-                        import re as regex
-                        # 替换 <br> <br/> <p> </p> 为换行
-                        html_text = regex.sub(r'(<br\s*/?>|<p>|</p>|<div[^>]*>|</div>)', '\n', html_text, flags=regex.IGNORECASE)
-                        
-                        # 日志：输出处理后的HTML内容
-                        logger.debug(f"处理后的HTML内容: {html_text}")
-                        
-                        # 替换&nbsp;为普通空格
-                        html_text = html_text.replace('&nbsp;', ' ')
-                        # 去除HTML标签
-                        body_text = regex.sub('<[^<]+?>', '', html_text)
-                        
-                        # 额外处理：保留换行和段落格式
-                        body_text = regex.sub(r'\n+', '\n', body_text)  # 保证不会多余的换行
-                        
-                        # 日志：输出最终的body_text
-                        logger.debug(f"最终处理后的正文内容: {body_text}")
-
-                        found_body = True
-                    except:
-                        body_text = "无法解码 HTML 邮件内容"
-                        found_body = True
-
-                # 下载附件
-                elif "attachment" in content_disp or part.get_filename():
-                    has_attachments = True
-                    filename = part.get_filename()
-                    if filename:
-                        if isinstance(filename, bytes):
-                            filename = filename.decode(errors='replace')
-                        filename = self.decode_mime_header(filename)
-                        filename = re.sub(r'[\\/:*?"<>|]', '_', filename)
-                        
-                        if not filename or filename.strip() == "":
-                            filename = f"attachment_{email_id}_{int(time.time())}.bin"
-                        
-                        file_path = email_dir / filename
-                        try:
-                            with open(file_path, 'wb') as f:
-                                payload = part.get_payload(decode=True)
-                                if payload:
-                                    f.write(payload)
-                            attachment_paths.append(str(file_path))
-                            logger.info(f"保存附件: {file_path}")
-                        except Exception as e:
-                            error_msg = f"保存附件 {filename} 失败: {str(e)}"
-                            logger.error(error_msg)
-                            attachment_errors.append(error_msg)
-
-            # 写入 content.txt
-            content_file = email_dir / "content.txt"
-            try:
-                with open(content_file, "w", encoding="utf-8") as f:
-                    f.write(f"主题: {subject}\n")
-                    f.write(f"发件邮箱: {sender}\n")
-                    f.write(f"收件邮箱: {', '.join(to_addrs)}\n")
-                    f.write(f"日期: {date_str}\n")
-                    f.write("-" * 50 + "\n\n")
-                    f.write(body_text if body_text.strip() else "[邮件内容为空或无法解析]")
-                logger.info(f"已保存 content.txt: {content_file}")
-            except Exception as e:
-                error_msg = f"保存 content.txt 失败: {str(e)}"
-                logger.error(error_msg)
-                return None, error_msg
-
-            # 验证下载完整性
-            if not content_file.exists() or content_file.stat().st_size <= 100:
-                return None, "content.txt 创建失败或文件过小"
+            # 3. 确定存储目录
+            email_dir = self._determine_email_directory(metadata)
             
-            if attachment_errors:
-                return None, "; ".join(attachment_errors)
-
+            # 4. 解析收件人
+            to_addrs = self._parse_recipients(msg)
+            
+            # 5. 提取正文
+            body_text = self._extract_email_body(msg)
+            
+            # 6. 下载附件
+            attachment_paths, attachment_errors = self._download_attachments(msg, email_dir, email_id)
+            
+            # 7. 保存 content.txt
+            success, error = self._save_content_file(email_dir, metadata, to_addrs, body_text)
+            if not success:
+                return None, error
+            
+            # 8. 验证完整性
+            success, error = self._validate_download(email_dir, attachment_errors)
+            if not success:
+                return None, error
+            
+            # 9. 构建结果
             result = {
-                'subject': subject,
-                'sender': sender,
-                'date': date_str,
-                'has_attachments': has_attachments,
+                'subject': metadata['subject'],
+                'sender': metadata['sender'],
+                'date': metadata['date_str'],
+                'has_attachments': len(attachment_paths) > 0,
                 'directory': str(email_dir),
                 'attachment_count': len(attachment_paths),
                 'attachments': attachment_paths,
                 'to_addrs': to_addrs
             }
-            logger.info(f"处理完成: {subject}")
+            
+            logger.info(f"处理完成: {metadata['subject']}")
             return result, None
 
         except Exception as e:
             error_msg = f"下载邮件 {email_id} 时出错: {str(e)}"
             logger.error(error_msg)
             return None, error_msg
-
 
     def download_multiple_emails(self, email_list, progress_callback=None, max_retries=2):
         """下载多封邮件，支持智能跳过和详细错误报告"""
@@ -1085,6 +1216,8 @@ class EmailDownloader:
 
         return results
     
+
+    # 所有涉及收发件人推断的操作在此步进行
     def generate_download_report(self, results, email_list, failed_details=None):
         """生成报告，TSV 去重，记录失败详情"""
         report_path = self.base_dir / "download_report.txt"
@@ -1146,7 +1279,7 @@ class EmailDownloader:
             if content_path.exists():
                 with open(content_path, "r", encoding="utf-8") as cf:
                     content = cf.read()
-                    m = re.search(r"发件[人x]=【(.+?)】", content)
+                    m = re.search(r"发件[^=]*=【(.+?)】", content)
                     if m:
                         sender_name = m.group(1)
             if not sender_name:
@@ -1167,10 +1300,10 @@ class EmailDownloader:
 
             # 发件时的收件人逻辑
             if send_type == "发":
-                if letter_type.startswith("C"):
-                    receiver_name = letter_type[1:]
-                elif letter_type.startswith("A+C"):
-                    receiver_name = letter_type[3:]
+                if letter_type and letter_type.lower().startswith("c"):
+                    # 去掉C后面的空格、等号、加号、方括号
+                    receiver_raw = letter_type[1:]
+                    receiver_name = re.sub(r'[\s=\+\[\]]+', '', receiver_raw)
                 else:
                     receiver_name = ""
             elif send_type == "收" and not receiver_name and only_oc_name:
@@ -1259,8 +1392,8 @@ class EmailDownloaderGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("邮件下载工具")
-        self.root.geometry("800x800")
-        self.root.minsize(800, 800)
+        self.root.geometry("800x900")
+        self.root.minsize(800, 900)
         
         # 创建下载器实例
         self.downloader = EmailDownloader()
@@ -1395,7 +1528,7 @@ class EmailDownloaderGUI:
                 # 2. 多个 OC
                 else:
                     # A 信
-                    if subject.startswith("A"):
+                    if subject.startswith("A") or subject.startswith("a"):
                         oc_to_fill = []
                         for oc in oc_names:
                             reg_date = oc_date_map.get(oc, "")
@@ -1444,22 +1577,32 @@ class EmailDownloaderGUI:
                                 # 统计每个 OC 名称出现次数
                                 oc_count = {oc: content_text.count(oc) for oc in oc_names}
                                 
-                                # 找出有且仅有 1 次出现的 OC
-                                unique_ocs = [oc for oc, count in oc_count.items() if count == 1]
-                                
-                                if len(unique_ocs) == 1:
-                                    cols[3] = unique_ocs[0]
+                                # 优先规则：如果只有一个 OC 出现（count>0），其它 OC 都为0，则直接选它（即便出现多次）
+                                nonzero_ocs = [oc for oc, count in oc_count.items() if count > 0]
+                                if len(nonzero_ocs) == 1:
+                                    chosen = nonzero_ocs[0]
+                                    cols[3] = chosen
                                     changed += 1
-                                    oc_guess_count[unique_ocs[0]] += 1
+                                    oc_guess_count[chosen] += 1
                                     context_logs.append(
-                                        f"[C信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)} (从content.txt提取: {unique_ocs[0]})"
+                                        f"[C信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)} (从content.txt提取: {chosen})"
                                     )
                                 else:
-                                    unguessed_count += 1
-                                    detail = f"各OC出现次数: {oc_count}"
-                                    context_logs.append(
-                                        f"[C信无法猜测] 行号{idx+3} 原:{row.strip()} content.txt中未找到唯一OC ({detail})"
-                                    )
+                                    # 次级规则：如果有且仅有某个 OC 出现 1 次，则选它
+                                    unique_ocs = [oc for oc, count in oc_count.items() if count == 1]
+                                    if len(unique_ocs) == 1:
+                                        cols[3] = unique_ocs[0]
+                                        changed += 1
+                                        oc_guess_count[unique_ocs[0]] += 1
+                                        context_logs.append(
+                                            f"[C信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)} (从content.txt提取: {unique_ocs[0]})"
+                                        )
+                                    else:
+                                        unguessed_count += 1
+                                        detail = f"各OC出现次数: {oc_count}"
+                                        context_logs.append(
+                                            f"[C信无法猜测] 行号{idx+3} 原:{row.strip()} content.txt中未找到唯一OC ({detail})"
+                                        )
                             except Exception as e:
                                 unguessed_count += 1
                                 context_logs.append(
@@ -1494,6 +1637,7 @@ class EmailDownloaderGUI:
             "智能猜测完成",
             f"自动补全结果：\n{detail}\n还有 {unguessed_count} 封无法被猜测。\n\n详细见下载日志区"
         )
+
     def toggle_search_mode(self):
         """切换检索模式（手动/配置化）"""
         mode = self.search_mode_var.get()
@@ -1558,47 +1702,54 @@ class EmailDownloaderGUI:
         version_label.pack(side=tk.RIGHT)
         
     def open_visualization_html(self):
-        """后台启动本地服务器并用浏览器打开可视化页面"""
-        import time
-
-        # 1. 启动 http.server（如果已启动则忽略报错）
-        try:
-            # Windows下隐藏cmd窗口
-            creationflags = 0
-            startupinfo = None
-            if sys.platform.startswith('win'):
-                creationflags = subprocess.CREATE_NEW_CONSOLE
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-            # 检查端口是否已被占用（简单方式）
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                sock.connect(('localhost', 8000))
-                sock.close()
-                server_running = True
-            except Exception:
-                server_running = False
-
-            if not server_running:
-                subprocess.Popen(
-                    [sys.executable, "-m", "http.server", "8000"],
-                    cwd=os.path.dirname(os.path.abspath(__file__)),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo
-                )
-                time.sleep(1)  # 等待服务器启动
-
-        except Exception as e:
-            messagebox.showerror("启动服务器失败", f"无法启动本地服务器: {e}")
+        """直接用浏览器打开本地 visualization_private.html 文件（无需服务器）"""
+        import webbrowser
+        import os
+        # 构造本地文件路径
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visualization_private.html")
+        if not os.path.exists(html_path):
+            messagebox.showerror("错误", f"未找到 {html_path}")
             return
-
-        # 2. 打开浏览器
-        url = "http://localhost:8000/visualization_private.html"
+        url = "file:///" + html_path.replace("\\", "/")
         webbrowser.open_new_tab(url)
+
+    def browse_root_directory(self):
+        """浏览并选择根目录"""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            initialdir=self.root_dir_var.get(),
+            title="选择根目录（邮件将存储在 根目录\\email\\ 下）"
+        )
+        if directory:
+            self.root_dir_var.set(directory)
+
+    def reset_root_directory(self):
+        """恢复默认根目录"""
+        self.root_dir_var.set(str(script_dir))
+        messagebox.showinfo("已恢复", f"已恢复为默认根目录:\n{script_dir}")
+
+    def save_settings(self):
+        """保存设置"""
+        try:
+            self.downloader.email_addr = self.email_var.get()
+            self.downloader.password = self.password_var.get()
+            self.downloader.imap_server = self.server_var.get()
+            self.downloader.timeout = int(self.timeout_var.get())
+            self.downloader.batch_size = int(self.batch_var.get())
+            
+            # ✅ 新增：保存根目录
+            root_path = Path(self.root_dir_var.get())
+            if not root_path.exists():
+                root_path.mkdir(parents=True, exist_ok=True)
+            
+            # 更新 base_dir（邮件存储在 根目录\email 下）
+            self.downloader.base_dir = root_path / "email"
+            self.downloader.base_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.downloader.save_config()
+            messagebox.showinfo("成功", "设置已保存")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存设置失败: {str(e)}")
 
     def create_login_tab(self):
         """创建登录设置选项卡"""
@@ -1638,6 +1789,24 @@ class EmailDownloaderGUI:
         self.server_combo.grid(row=3, column=1, sticky=tk.W, pady=5)
         self.server_combo.bind("<<ComboboxSelected>>", lambda e: self.server_var.set(servers[self.server_combo.get()]))
         
+        # ✅ 新增：根目录框架
+        root_dir_frame = ttk.LabelFrame(self.login_frame, text="根目录设置", padding=(10, 5))
+        root_dir_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(root_dir_frame, text="根目录:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.root_dir_var = tk.StringVar(value=str(script_dir))
+        root_dir_entry = ttk.Entry(root_dir_frame, textvariable=self.root_dir_var, width=50)
+        root_dir_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        browse_btn = ttk.Button(root_dir_frame, text="浏览...", command=self.browse_root_directory)
+        browse_btn.grid(row=0, column=2, padx=5, pady=5)
+        
+        reset_btn = ttk.Button(root_dir_frame, text="恢复默认", command=self.reset_root_directory)
+        reset_btn.grid(row=0, column=3, padx=5, pady=5)
+        
+        info_label = ttk.Label(root_dir_frame, text="邮件将存储在: 根目录\\email\\收(发)\\日期_主题", foreground="gray")
+        info_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=5)
+
         # 高级设置框架
         advanced_frame = ttk.LabelFrame(self.login_frame, text="高级设置", padding=(10, 5))
         advanced_frame.pack(fill=tk.X, pady=10)
@@ -1653,6 +1822,8 @@ class EmailDownloaderGUI:
         self.batch_var = tk.StringVar(value=str(self.downloader.batch_size))
         batch_entry = ttk.Entry(advanced_frame, textvariable=self.batch_var, width=10)
         batch_entry.grid(row=1, column=1, sticky=tk.W, pady=5)
+
+        
         
         # 按钮框架
         button_frame = ttk.Frame(self.login_frame)
@@ -1695,6 +1866,26 @@ class EmailDownloaderGUI:
     
     def create_search_tab(self):
         """创建搜索选项卡"""
+
+        oc_frame = ttk.LabelFrame(self.search_frame, text="注册OC [格式: 名称_YYYY-MM-DD]", padding=(10, 5))
+        oc_frame.pack(fill=tk.X, pady=5)
+        
+        self.oc_input_var = tk.StringVar()
+        oc_entry = ttk.Entry(oc_frame, textvariable=self.oc_input_var, width=40)
+        oc_entry.pack(side=tk.LEFT, padx=5)
+        
+        oc_register_btn = ttk.Button(oc_frame, text="注册", command=self.register_oc)
+        oc_register_btn.pack(side=tk.LEFT, padx=5)
+        
+        oc_info_label = ttk.Label(oc_frame, text="(可多次注册多个OC)", foreground="gray")
+        oc_info_label.pack(side=tk.LEFT, padx=5)
+        
+        # 文件夹选择框架
+        folder_frame = ttk.LabelFrame(self.search_frame, text="选择邮箱文件夹", padding=(10, 5))
+        folder_frame.pack(fill=tk.X, pady=5)
+    
+
+
         # 文件夹选择框架
         folder_frame = ttk.LabelFrame(self.search_frame, text="选择邮箱文件夹", padding=(10, 5))
         folder_frame.pack(fill=tk.X, pady=5)
@@ -1859,11 +2050,7 @@ class EmailDownloaderGUI:
 
     def create_download_tab(self):
         """创建下载选项卡"""
-        reg_frame = ttk.LabelFrame(self.download_frame, text="注册OC[eg:CrackPostUser_2022-07-01]", padding=(10, 5))
-        reg_frame.pack(fill=tk.X, pady=5)
-        self.oc_input_var = tk.StringVar()
-        ttk.Entry(reg_frame, textvariable=self.oc_input_var, width=30).pack(side=tk.LEFT, padx=5)
-        ttk.Button(reg_frame, text="注册", command=self.register_oc).pack(side=tk.LEFT, padx=5)
+
 
         # 下载进度框架
         progress_frame = ttk.LabelFrame(self.download_frame, text="下载进度", padding=(10, 5))
@@ -1876,14 +2063,13 @@ class EmailDownloaderGUI:
         self.download_progress = ttk.Progressbar(progress_frame, orient=tk.HORIZONTAL, length=100, 
                                             mode='determinate')
         self.download_progress.pack(fill=tk.X, pady=5)
-        
-        # 下载结果框架（垂直高度缩小）
+        # 下载结果框架（纵向可拉伸）
         results_frame = ttk.LabelFrame(self.download_frame, text="下载结果")
-        results_frame.pack(fill=tk.X, expand=False, pady=6)
-        
-       # 创建文本区域，height 指定可视行数，值越小区域越短
-        self.download_log = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, height=10)
-        self.download_log.pack(fill=tk.X, expand=True, padx=5, pady=5)
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=6)  # 允许纵向扩展
+
+        # 创建文本区域，height 可以适当增大
+        self.download_log = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, height=18)
+        self.download_log.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)  # 允许纵向扩展
 
         # 提示块
         tip_frame = ttk.LabelFrame(self.download_frame, text="可视化提示", padding=(10, 5))
