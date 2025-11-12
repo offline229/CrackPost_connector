@@ -33,12 +33,7 @@ import imaplib, ssl, sys
 # 增加错误处理
 # 增加日志
 # 增加未匹配手动加入功能
-# 增加html界面的手动打开功能
-# 下载时，发件可能是A B C某人 
-# 收件可能是
-# 在选项卡恢复下载地址，但默认下载地址为根目录下email文件夹
-# 看来不能用跨域了，必须要在html里面加一个手动载入
-
+# 提醒回信的类似功能，比如某bu的信你已经x天没回了
 # 打包指南
 
 # python -m venv venv
@@ -333,13 +328,12 @@ class EmailDownloader:
                 'batch_size': '100'
             }
             
-            # 默认规则与搜索规则保持一致，可见的只有搜索规则。不可见不可改的是下载和归一化规则
             config['DefaultRules'] = {
                 'rule1_subject_pattern': r'^Fw[:：]?(A\d+|A\*\d+|B\d+|C\d+|A\+B\d+|A\+C\d+|A\+B\*\d+|A\+C\*\d+)',
                 'rule1_from': 'crackpost2@126.com,crackpost@126.com',
                 'rule1_to': '{self_email}',
                 
-                'rule2_subject_pattern': r'^(A|B|C\+.*|A\+B.*|A\+C.*)$',
+                'rule2_subject_pattern': r'^(A|B|C.*|A\+B.*|A\+C.*)$',
                 'rule2_from': '{self_email}',
                 'rule2_to': 'crackpost2@126.com,crackpost@126.com',
                 'rule2_body_contains': '发件人=【'
@@ -1301,7 +1295,6 @@ class EmailDownloader:
             # 发件时的收件人逻辑
             if send_type == "发":
                 if letter_type and letter_type.lower().startswith("c"):
-                    # 去掉C后面的空格、等号、加号、方括号
                     receiver_raw = letter_type[1:]
                     receiver_name = re.sub(r'[\s=\+\[\]]+', '', receiver_raw)
                 else:
@@ -1310,8 +1303,6 @@ class EmailDownloader:
                 receiver_name = only_oc_name
 
             save_path = result.get('directory', '')
-            # 转换为相对路径
-            save_path_formatted = save_path
             try:
                 save_dir = Path(save_path).resolve()
                 rel = save_dir.relative_to(project_root)
@@ -1324,26 +1315,37 @@ class EmailDownloader:
                 except Exception:
                     save_path_formatted = save_path
 
-            # 去重检查
-            key = (sender_name, date_short, letter_type, save_path_formatted)
+            # 新增：用更强唯一键（发件人、收件人、日期、类型、路径）
+            key = (sender_name, receiver_name, date_short, letter_type, save_path_formatted)
             if key not in existing_mails:
                 row = f"{send_type}\t{date_short}\t{sender_name}\t{receiver_name}\t{letter_type}\t{save_path_formatted}"
                 new_rows.append(row)
                 existing_mails.add(key)
             else:
                 duplicate_count += 1
-                logger.info(f"跳过重复项: {sender_name} {date_short} {letter_type}")
+                logger.info(f"跳过重复项: {sender_name} {receiver_name} {date_short} {letter_type}")
 
-        # 4. 写入 TSV
+        # 4. 合并 old+new 后全局去重
+        all_rows = existing_rows + new_rows
+        unique_row_keys = set()
+        final_rows = []
+        for row in all_rows:
+            cols = row.strip().split('\t')
+            if len(cols) < 6:
+                continue
+            row_key = tuple(cols[:6])  # 用全部6列做唯一性
+            if row_key not in unique_row_keys:
+                unique_row_keys.add(row_key)
+                final_rows.append(row)
+
+        # 5. 写入 TSV
         with open(global_result_path, "w", encoding="utf-8") as f:
             f.write(f"oc_registerdata\t{','.join(all_oc)}\n")
             f.write("收/发类型\t发信日期\t发件人\t收件人\t信件类型\t信件下载位置\n")
-            for row in existing_rows:
-                f.write(row + "\n")
-            for row in new_rows:
+            for row in final_rows:
                 f.write(row + "\n")
 
-        # 5. 写入下载报告
+        # 6. 写入下载报告
         with open(report_path, "w", encoding="utf-8") as f:
             f.write("邮件下载报告\n")
             f.write("=" * 50 + "\n\n")
@@ -1551,12 +1553,29 @@ class EmailDownloaderGUI:
                                 f"[A信无可补全] 行号{idx+3} 原:{row.strip()} 注册日期无符合条件的OC"
                             )
                     
-                    # B 信：保持为空
-                    elif subject.startswith("B"):
-                        unguessed_count += 1
-                        context_logs.append(
-                            f"[B信无法猜测] 行号{idx+3} 原:{row.strip()}"
-                        )
+                    # B 信：同A信，补全为所有符合注册日期的OC
+                    elif subject.startswith("B") or subject.startswith("b"):
+                        oc_to_fill = []
+                        for oc in oc_names:
+                            reg_date = oc_date_map.get(oc, "")
+                            try:
+                                if reg_date and send_date and reg_date <= send_date:
+                                    oc_to_fill.append(oc)
+                            except:
+                                pass
+                        if oc_to_fill:
+                            cols[3] = ",".join(oc_to_fill)
+                            changed += 1
+                            for oc in oc_to_fill:
+                                oc_guess_count[oc] += 1
+                            context_logs.append(
+                                f"[B信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)}"
+                            )
+                        else:
+                            unguessed_count += 1
+                            context_logs.append(
+                                f"[B信无可补全] 行号{idx+3} 原:{row.strip()} 注册日期无符合条件的OC"
+                            )
                     
                     # C 信或 A+C 信：从 content.txt 提取
                     elif subject.startswith("C") or subject.startswith("A+C"):
@@ -1702,15 +1721,19 @@ class EmailDownloaderGUI:
         version_label.pack(side=tk.RIGHT)
         
     def open_visualization_html(self):
-        """直接用浏览器打开本地 visualization_private.html 文件（无需服务器）"""
+        """从用户配置的根目录打开 visualization_private.html"""
         import webbrowser
         import os
-        # 构造本地文件路径
-        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visualization_private.html")
-        if not os.path.exists(html_path):
-            messagebox.showerror("错误", f"未找到 {html_path}")
+        
+        # ✅ 从用户配置的根目录查找
+        root_dir = Path(self.root_dir_var.get())
+        html_path = root_dir / "visualization_private.html"
+        
+        if not html_path.exists():
+            messagebox.showerror("错误", f"未找到可视化文件:\n{html_path}\n\n请确保 visualization_private.html 在根目录下")
             return
-        url = "file:///" + html_path.replace("\\", "/")
+        
+        url = "file:///" + str(html_path).replace("\\", "/")
         webbrowser.open_new_tab(url)
 
     def browse_root_directory(self):
@@ -1840,10 +1863,10 @@ class EmailDownloaderGUI:
         # 帮助信息
         help_text = """
         步骤说明：
-        1. 获取授权码：在邮箱设置里获取 IMAP/授权码（例如 QQ 邮箱需开启 IMAP 并生成授权码），如有日期限制，请选择全部。
+        1. 获取授权码：在邮箱设置里获取 IMAP/授权码，如有日期限制，请选择全部而不是30天。
         2. 登录：在“登录设置”中填写邮箱地址、授权码与 IMAP 服务器，点击“测试连接并登录”确认可用。
-        3. 选择检索规则：在“搜索邮件”页选择或填写主题/发件人/日期等规则，留空表示全选，然后点击“搜索邮件”。
-        4. 注册 OC：在“下载结果”页注册你的 OC（格式：名称_YYYY-MM-DD），用于后续自动匹配与标注。
+        3. 注册 OC：在“下载结果”页注册你的 OC，即其第一次使用地缝的时间（格式：名称_YYYY-MM-DD），用于后续自动匹配与标注。
+        4. 选择检索规则：在“搜索邮件”页选择收发规则。如有必要，手动填写主题/发件人/日期等规则，留空表示全选，然后点击“搜索邮件”。[语法为正则搜索]
         5. 智能补齐：若同一 OC 有多个马甲，下载完成后可点击“智能猜测收件人”自动补齐 global_result.tsv 中的收件人字段。
         6. 手工修正：在生成的 global_result.tsv 中对不满意的条目（收件人、路径等）进行手工修正。
         7. 启动可视化：在“下载结果”页点击“打开邮件网络可视化”查看关系图。
@@ -1867,7 +1890,7 @@ class EmailDownloaderGUI:
     def create_search_tab(self):
         """创建搜索选项卡"""
 
-        oc_frame = ttk.LabelFrame(self.search_frame, text="注册OC [格式: 名称_YYYY-MM-DD]", padding=(10, 5))
+        oc_frame = ttk.LabelFrame(self.search_frame, text="填写OC名及该OC注册时间 [格式: 名称_YYYY-MM-DD]", padding=(10, 5))
         oc_frame.pack(fill=tk.X, pady=5)
         
         self.oc_input_var = tk.StringVar()

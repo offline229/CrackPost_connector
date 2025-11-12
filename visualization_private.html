@@ -251,6 +251,7 @@
     // 增加每日收件数
     // b不可点击
     // 待测试里有需要改的东西
+    // tsv要去重
 
     //// ========================= 数据加载 =========================
 
@@ -319,7 +320,6 @@
         return [...new Set(candidates)];
     }
 
-    //待测试，字数
     /**
      * 读取候选路径之一的内容并计算字数，写回 emailObj.wordCount，必要时抽取发件人
      * @param {object} emailObj - emailData 中的一条记录（将被就地写 wordCount）
@@ -410,35 +410,61 @@
             // 解析 OC 注册
             const ocData = parseOcRegisterData(lines[0] || '');
 
-            const emailData = [];
+            const emailMap = new Map(); // 使用 Map 来合并重复的邮件记录
+
+for (let i = 2; i < lines.length; i++) {
+    const cols = lines[i].split('\t');
+    if (cols.length < 6) continue;
+
+    const emailObj = parseEmailRow(cols);
+    emailObj.__tsvLine = i + 1; // 记录原始 TSV 行号
+
+    // 为 C 类信件创建一个唯一的标识符，用于合并 "发" 和 "收"
+    let uniqueKey = null;
+    if (emailObj.letterType.toUpperCase().startsWith('C') && emailObj.sender && emailObj.receiver) {
+        const participants = [emailObj.sender, emailObj.receiver].sort();
+        uniqueKey = `${emailObj.letterType}|${emailObj.date}|${participants[0]}|${participants[1]}`;
+    } else {
+        uniqueKey = emailObj.path || `line-${i}`;
+    }
+
+    // 如果记录已存在，则跳过，并打印详细信息
+    if (emailMap.has(uniqueKey)) {
+        const existed = emailMap.get(uniqueKey);
+        console.warn('[C信去重] 检测到重复信件:', {
+            uniqueKey,
+            当前行号: emailObj.__tsvLine,
+            已有行号: existed.__tsvLine,
+            当前: emailObj,
+            已有: existed
+        });
+        continue;
+    }
+
+    emailMap.set(uniqueKey, emailObj);
+}
+
+            const emailData = Array.from(emailMap.values());
             const fetchTasks = [];
 
-            for (let i = 2; i < lines.length; i++) {
-                const cols = lines[i].split('\t');
-                if (cols.length < 6) continue;
-
-                const emailObj = parseEmailRow(cols);
-
-                emailData.push(emailObj);
-
+            emailData.forEach(emailObj => {
                 if (emailObj.path) {
                     const candidates = buildContentCandidatesFromPath(emailObj.path);
                     fetchTasks.push(fetchContentAndComputeWordCount(emailObj, candidates, emailObj.sender));
                 }
-            }
+            });
 
             if (fetchTasks.length) {
                 await Promise.all(fetchTasks);
                 console.debug('[wordcount] 全部 content 读取任务完成');
             }
-            console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件");
+            console.log("加载数据:", ocData.length, "个OC,", emailData.length, "封邮件 (已合并)");
             return { ocData, emailData };
         } catch (error) {
             console.error('加载邮件数据失败:', error);
             return { ocData: [], emailData: [] };
         }
     }
-
 
     //// ========================= 数据解析 =========================
     /**
@@ -449,22 +475,29 @@
      * 
      * 生成信件列表（lettersData）
      * 按业务规则，把邮件数据拆分为 A/B/C 三类信件，并补充必要的字段（如发件人、收件人、编号、类型、是否 OC 发件等）。
-     * 对于 B 信，非 OC 发件人会自动推断最近的 OC 作为收件人。
      */
     function processEmailData(ocData, emailData) {
         const ocNames = ocData.map(oc => oc.name);
 
         /**
          * 汇总用户首次出现时间，生成 usersData（包含 OC + 非OC）
+         * 更新了对多人收件用户的解析
          */
         function buildUsersData() {
             const userFirstSeen = new Map();
             emailData.forEach(email => {
+                // 处理发件人
                 if (!userFirstSeen.has(email.sender) || new Date(email.date) < new Date(userFirstSeen.get(email.sender))) {
                     userFirstSeen.set(email.sender, email.date);
                 }
-                if (email.receiver && (!userFirstSeen.has(email.receiver) || new Date(email.date) < new Date(userFirstSeen.get(email.receiver)))) {
-                    userFirstSeen.set(email.receiver, email.date);
+                // 处理收件人（可能有多个）
+                if (email.receiver) {
+                    const receivers = email.receiver.split(',').map(r => r.trim()).filter(Boolean);
+                    receivers.forEach(rName => {
+                        if (!userFirstSeen.has(rName) || new Date(email.date) < new Date(userFirstSeen.get(rName))) {
+                            userFirstSeen.set(rName, email.date);
+                        }
+                    });
                 }
             });
 
@@ -472,7 +505,6 @@
             ocData.forEach(oc => {
                 usersData.push({
                     name: oc.name,
-                    email: `${oc.name}@example.com`,
                     registerDate: oc.registerDate,
                     isOC: true
                 });
@@ -481,28 +513,12 @@
                 if (!ocNames.includes(userName) && userName) {
                     usersData.push({
                         name: userName,
-                        email: `${userName}@example.com`,
                         registerDate: firstSeenDate,
                         isOC: false
                     });
                 }
             });
             return usersData;
-        }
-
-        /**
-         * 辅助：找到给定日期之前最近的若干 OC（用于 B 信推断），待测试，b发给所有ic
-         */
-        function findRelevantOCs(date, ocHistory) {
-            const emailDate = new Date(date);
-            const relevantOCs = [];
-            for (let i = 0; i < ocHistory.length && relevantOCs.length < 5; i++) {
-                const ocDate = new Date(ocHistory[i].date);
-                if (ocDate <= emailDate && !relevantOCs.includes(ocHistory[i].sender)) {
-                    relevantOCs.push(ocHistory[i].sender);
-                }
-            }
-            return relevantOCs;
         }
 
         /**
@@ -525,8 +541,8 @@
                 const letterNumber = letterTypeMatch[0];
                 const isOCSender = ocNames.includes(email.sender);
 
-                if (isOCSender) {
-                    if (letterType === 'A') {
+                if (isOCSender) { //发信，有可能是正常发BC信，也有可能是作为oc自己发收的A信。
+                    if (letterType === 'A') {// 若自己发的A信，不计入计算，只有当A正式被广播收到时，才计算。
                         if ((email.sendType || '').trim() === '收') {
                             lettersData.push({
                                 sender: email.sender,
@@ -564,8 +580,7 @@
                             });
                         }
                     }
-                } else {
-                    const relevantOCs = findRelevantOCs(email.date, ocSentHistory);
+                } else {    // 非OC发信，即收信
                     if (letterType === 'A') {
                         lettersData.push({
                             sender: email.sender,
@@ -577,13 +592,14 @@
                             path: email.path || ''
                         });
                     } else if (letterType === 'B') {
-                        if (relevantOCs.length > 0) {
+                        const receivers = (email.receiver || '').split(',').map(r => r.trim()).filter(Boolean);
+                        if (receivers.length > 0) {
                             lettersData.push({
                                 sender: email.sender,
                                 type: letterType,
                                 number: letterNumber,
                                 date: email.date,
-                                receivers: relevantOCs,
+                                receivers: receivers,
                                 isOCSender: false,
                                 path: email.path || ''
                             });
@@ -624,22 +640,6 @@
             const processed = processEmailData(ocData, emailData);
             usersData = processed.usersData;
             lettersData = processed.lettersData;
-        } else {
-            // fallback mock (keeps same structure)
-            usersData = [
-                { name: "OC1", email: "oc1@example.com", registerDate: "2025-01-01", isOC: true },
-                { name: "OC2", email: "oc2@example.com", registerDate: "2025-01-05", isOC: true },
-                { name: "User1", email: "user1@example.com", registerDate: "2025-01-10", isOC: false },
-                { name: "User2", email: "user2@example.com", registerDate: "2025-01-15", isOC: false },
-                { name: "User3", email: "user3@example.com", registerDate: "2025-01-20", isOC: false }
-            ];
-            lettersData = [
-                { sender: "User1", type: "A", number: "A001", date: "2025-02-01", receivers: ["OC1", "OC2"], isOCSender: false },
-                { sender: "OC1", type: "B", number: "B001", date: "2025-02-05", receivers: [], isOCSender: true, isBroadcast: true },
-                { sender: "User2", type: "B", number: "B002", date: "2025-02-10", receivers: ["OC1"], isOCSender: false },
-                { sender: "OC2", type: "C", number: "C小明", date: "2025-02-15", receivers: ["User3"], isOCSender: true },
-                { sender: "User3", type: "C", number: "C002", date: "2025-02-20", receivers: ["User1"], isOCSender: false }
-            ];
         }
         return { usersData, lettersData };
     }
@@ -795,7 +795,7 @@
     function setupInteractions(state) {
         const { canvas, nodes, links, view, tooltip, senderRings, nodeById,
             getDisplayPos, computeQuadraticControl, distancePointToQuadratic,
-            width, height, dateState } = state;
+            width, height, dateState, lettersData } = state;
 
         let draggingNode = null;
         let dragOffset = { x: 0, y: 0 };
@@ -804,6 +804,7 @@
         let hoveredLink = null;
         let hoveredNode = null;
         let hoveredRing = null;
+        let hoveredBroadcast = null;
         let expandedItem = null;
 
         // 客户端坐标 -> 世界坐标
@@ -860,6 +861,49 @@
             }
             return null;
         }
+        
+        function findBroadcastLineAtWorld(x, y, threshold = 8 / Math.max(0.001, view.scale)) {
+            const nowSec = Date.now() / 1000;
+            for (const letter of lettersData) {
+                if (letter.type !== "B" || !letter.isOCSender || !letter.isBroadcast) continue;
+                const senderNode = nodeById[letter.sender];
+                if (!senderNode || !senderNode.visible) continue;
+                const letterDate = letter.dateObj ? letter.dateObj : new Date(letter.date);
+                if (letterDate > dateState.current) continue;
+                
+                const sp = getDisplayPos(senderNode);
+                const lineCount = 5;
+                if (!letter._bcastState) continue; // 未初始化，跳过
+                
+                const st = letter._bcastState;
+                for (let i = 0; i < lineCount; i++) {
+                    const ang = st.angles[i];
+                    const len = st.baseLen[i] + st.amps[i] * (0.5 + 0.5 * Math.sin(st.phases[i] + nowSec * st.speeds[i]));
+                    const ex = sp.x + Math.cos(ang) * len;
+                    const ey = sp.y + Math.sin(ang) * len;
+                    
+                    // 点到线段的距离
+                    const dist = distancePointToLineSegment(x, y, sp.x, sp.y, ex, ey);
+                    if (dist <= threshold) {
+                        return { letter, sender: senderNode, lineIndex: i };
+                    }
+                }
+            }
+            return null;
+        }
+
+        // 辅助：点到线段距离
+        function distancePointToLineSegment(px, py, x1, y1, x2, y2) {
+            const dx = x2 - x1, dy = y2 - y1;
+            const len2 = dx * dx + dy * dy;
+            if (len2 === 0) return Math.hypot(px - x1, py - y1);
+            let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+            t = Math.max(0, Math.min(1, t));
+            const projX = x1 + t * dx;
+            const projY = y1 + t * dy;
+            return Math.hypot(px - projX, py - projY);
+        }
+
 
         function showTooltipAtClient(clientX, clientY, html) {
             if (!tooltip) return;
@@ -921,20 +965,29 @@
                     hideTooltip();
                 } else {
                     const sent = node.sentCount || 0;
-                    const recv = node.recvCount || 0;
                     const sWords = node.sentWords || 0;
-                    const rWords = node.recvWords || 0;
-                    const aRecv = node.recvACount || 0;
-                    const aWords = node.recvAWords || 0;
-                    const normalRecv = Math.max(0, recv - aRecv);
-                    const normalRWords = Math.max(0, rWords - aWords);
-                    const html = `<b>发信人：</b>${node.displayName || node.id}` +
-                        `<br><b>发出：</b>${sent}` +
-                        `<br><b>发字数：</b>${sWords} 字` +
-                        `<br><b>收到(总)：</b>${recv}` +
-                        `<br><b>收字数(总)：</b>${rWords} 字` +
-                        `<br><b>其中A：</b>${aRecv} 封 / ${aWords} 字` +
-                        `<br><b>BC信：</b>${normalRecv} 封 / ${normalRWords} 字`;
+                    
+                    let html = `<b>发信人：</b>${node.displayName || node.id}` +
+                        `<br><b>发出：</b>${sent} 封` +
+                        `<br><b>发字数：</b>${sWords} 字`;
+                    
+                    // ✅ 非OC：只显示总计（BC 信）
+                    if (!node.isOC) {
+                        const recv = node.recvCount || 0;
+                        const rWords = node.recvWords || 0;
+                        html += `<br><b>收到：</b>${recv} 封` +
+                                `<br><b>收字数：</b>${rWords} 字`;
+                    }
+                    // ✅ OC：分别显示 A 和 BC
+                    else {
+                        const aRecv = node.recvACount || 0;
+                        const aWords = node.recvAWords || 0;
+                        const bcRecv = (node.recvCount || 0);
+                        const bcWords = (node.recvWords || 0);
+                        html += `<br><b>收到A：</b>${aRecv} 封 / ${aWords} 字` +
+                                `<br><b>收到BC：</b>${bcRecv} 封 / ${bcWords} 字`;
+                    }
+                    
                     showTooltipAtClient(evt.clientX, evt.clientY, html);
                 }
             } else if (hoveredNode && tooltip && tooltip.style.display === 'block') {
@@ -984,6 +1037,26 @@
                     }
                 } else {
                     hoveredRing = null;
+                }
+
+                if (!hoveredLink && !hoveredNode && !hoveredRing) {
+                    const bcastHit = findBroadcastLineAtWorld(worldX, worldY);
+                    if (bcastHit) {
+                        if (expandedItem) expandedItem = null;
+                        hoveredBroadcast = bcastHit; // ← 新增状态变量
+                        const letter = bcastHit.letter;
+                        const sender = bcastHit.sender.id;
+                        const receivers = (letter.receivers || []).join(',');
+                        const number = letter.number || '';
+                        const date = letter.date || '';
+                        const type = 'B';
+                        const html = `<b>发件：</b>${sender}<br><b>收件：</b>${receivers}<br><b>编号：</b>${number}<br><b>日期：</b>${date}<br><b>类型：</b>${type}`;
+                        showTooltipAtClient(evt.clientX, evt.clientY, html);
+                    } else {
+                        hoveredBroadcast = null;
+                    }
+                } else {
+                    hoveredBroadcast = null;
                 }
             } else {
                 hoveredLink = null;
@@ -1120,6 +1193,34 @@
                 })(0);
                 return;
             }
+        
+            if (hoveredBroadcast) {
+                const letter = hoveredBroadcast.letter;
+                const rawPath = letter.path || '';
+                const title = `${hoveredBroadcast.sender.id} → (广播) ${letter.number || ''}`.trim();
+                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const candidates = resolveLetterCandidates(rawPath || '');
+                if (!candidates.length) {
+                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(letter) || '')}</pre>`;
+                    return;
+                }
+                body.textContent = '正在读取信件...';
+                (function tryOne(i) {
+                    if (i >= candidates.length) {
+                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
+                        return;
+                    }
+                    fetch(candidates[i]).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    }).then(txt => {
+                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                    }).catch(() => tryOne(i + 1));
+                })(0);
+                return;
+            }
+        
+        
         });
 
         // ===== dblclick =====
@@ -1131,7 +1232,8 @@
         return {
             getHoveredNode: () => hoveredNode,
             getHoveredLink: () => hoveredLink,
-            getHoveredRing: () => hoveredRing
+            getHoveredRing: () => hoveredRing,
+            getHoveredBroadcast: () => hoveredBroadcast
         };
     }
 
@@ -1438,7 +1540,8 @@
                 const isOCSender = ocNameSet.has(sender);
                 const sNode = nodeById[sender];
                 const rNode = nodeById[receiver];
-
+                // 统计oc收到的A信+BC信
+                // 统计非oc收到的C信
                 if (sendType === '发') {
                     if (letterType === 'A') return;
                     if (letterType === 'B') {
@@ -1467,38 +1570,56 @@
                 }
 
                 if (sendType === '收') {
+                    // 收信者只可能是作为oc收到各种A\B\C信
+                    // 本人发的A，计入本人数量
+                    // 非本人发的A，计入该用户数量
                     if (isOCSender && letterType === 'A') {
                         if (sNode) {
                             sNode.sentWords = (sNode.sentWords || 0) + added;
                             sNode.sentCount = (sNode.sentCount || 0) + 1;
                         }
-                        allNodes.forEach(n => {
-                            try {
-                                const regOk = n.registerDateObj && n.registerDateObj <= eDate;
-                                if (regOk) {
-                                    n.recvACount = (n.recvACount || 0) + 1;
-                                    n.recvAWords = (n.recvAWords || 0) + added;
-                                    n.recvWords = (n.recvWords || 0) + added;
-                                    n.recvCount = (n.recvCount || 0) + 1;
-                                }
-                            } catch (e) { }
+                        // 拆分收件人并统计，一般包含了自己
+                        const receivers = (receiver || '').split(',').map(r => r.trim()).filter(Boolean);
+                        receivers.forEach(rName => {
+                            const rNode = nodeById[rName];
+                            if (rNode) {
+                                rNode.recvAWords = (rNode.recvAWords || 0) + added;
+                                rNode.recvACount = (rNode.recvACount || 0) + 1;
+                            }
                         });
                         return;
                     }
-                    if (!isOCSender && letterType === 'A') return;
-                    if (isOCSender) {
+                    if (!isOCSender && letterType === 'A') {
                         if (sNode) {
                             sNode.sentWords = (sNode.sentWords || 0) + added;
                             sNode.sentCount = (sNode.sentCount || 0) + 1;
+                        // 拆分收件人并统计
+                        const receivers = (receiver || '').split(',').map(r => r.trim()).filter(Boolean);
+                        receivers.forEach(rName => {
+                            const rNode = nodeById[rName];
+                            if (rNode) {
+                                rNode.recvAWords = (rNode.recvAWords || 0) + added;
+                                rNode.recvACount = (rNode.recvACount || 0) + 1;
+                            }
+                        });
                         }
-                        allNodes.forEach(n => {
-                            try {
-                                const regOk = n.registerDateObj && n.registerDateObj <= eDate;
-                                if (regOk) {
-                                    n.recvWords = (n.recvWords || 0) + added;
-                                    n.recvCount = (n.recvCount || 0) + 1;
-                                }
-                            } catch (e) { }
+                        return;
+                    }
+                    // 收信者作为oc收到BC信，计入收信者数量
+                    // ✅ 只对 B 信拆分多个收件人，其他信件保持原逻辑
+                    if (letterType === 'B') {
+                        const receivers = (receiver || '').split(',').map(r => r.trim()).filter(Boolean);
+                        if (sNode) {
+                            sNode.sentWords = (sNode.sentWords || 0) + added;
+                            sNode.sentCount = (sNode.sentCount || 0) + 1; // 发件人只 +1 一次
+                        }
+                        // 每个收件人分别 +1
+                        receivers.forEach(rName => {
+                            const rNode = nodeById[rName];
+                            if (rNode) {
+                                rNode.recvWords = (rNode.recvWords || 0) + added;
+                                rNode.recvCount = (rNode.recvCount || 0) + 1;
+                            }
                         });
                         return;
                     }
@@ -1512,15 +1633,6 @@
                     }
                     return;
                 }
-
-                if (sNode) {
-                    sNode.sentWords = (sNode.sentWords || 0) + added;
-                    sNode.sentCount = (sNode.sentCount || 0) + 1;
-                }
-                if (rNode) {
-                    rNode.recvWords = (rNode.recvWords || 0) + added;
-                    rNode.recvCount = (rNode.recvCount || 0) + 1;
-                }
             } catch (e) {
                 console.debug('[wordcount] accumulate err', e, email);
             }
@@ -1529,20 +1641,30 @@
         try {
             if (hoveredNode && tooltip && tooltip.style.display === 'block') {
                 const sent = hoveredNode.sentCount || 0;
-                const recv = hoveredNode.recvCount || 0;
                 const sWords = hoveredNode.sentWords || 0;
-                const rWords = hoveredNode.recvWords || 0;
-                const aRecv = hoveredNode.recvACount || 0;
-                const aWords = hoveredNode.recvAWords || 0;
-                const normalRecv = Math.max(0, recv - aRecv);
-                const normalRWords = Math.max(0, rWords - aWords);
-                tooltip.innerHTML = `<b>发信人：</b>${hoveredNode.displayName || hoveredNode.id}` +
-                    `<br><b>发出：</b>${sent}` +
-                    `<br><b>发字数：</b>${sWords} 字` +
-                    `<br><b>收到(总)：</b>${recv}` +
-                    `<br><b>收字数(总)：</b>${rWords} 字` +
-                    `<br><b>其中A：</b>${aRecv} 封 / ${aWords} 字` +
-                    `<br><b>BC信：</b>${normalRecv} 封 / ${normalRWords} 字`;
+                
+                let html = `<b>发信人：</b>${hoveredNode.displayName || hoveredNode.id}` +
+                    `<br><b>发出：</b>${sent} 封` +
+                    `<br><b>发字数：</b>${sWords} 字`;
+                
+                // ✅ 非OC：只显示总计
+                if (!hoveredNode.isOC) {
+                    const recv = hoveredNode.recvCount || 0;
+                    const rWords = hoveredNode.recvWords || 0;
+                    html += `<br><b>收到：</b>${recv} 封` +
+                            `<br><b>收字数：</b>${rWords} 字`;
+                }
+                // ✅ OC：分别显示 A 和 BC
+                else {
+                    const aRecv = hoveredNode.recvACount || 0;
+                    const aWords = hoveredNode.recvAWords || 0;
+                    const bcRecv = (hoveredNode.recvCount || 0);
+                    const bcWords = (hoveredNode.recvWords || 0);
+                    html += `<br><b>收到A：</b>${aRecv} 封 / ${aWords} 字` +
+                            `<br><b>收到BC：</b>${bcRecv} 封 / ${bcWords} 字`;
+                }
+                
+                tooltip.innerHTML = html;
             }
         } catch (e) { }
     }
@@ -1935,7 +2057,7 @@
     /**
      * 绘制高亮（hover 效果）
      */
-    function drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, getDisplayPos, computeQuadraticControl) {
+    function drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, hoveredBroadcast, getDisplayPos, computeQuadraticControl) {
         if (hoveredLink) {
             ctx.save();
             ctx.lineWidth = 3;
@@ -1969,6 +2091,24 @@
             const ownerPos = getDisplayPos(hoveredRing.owner);
             ctx.beginPath();
             ctx.arc(ownerPos.x, ownerPos.y, hoveredRing.rad, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+        if (hoveredBroadcast) {
+            ctx.save();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+            const sp = getDisplayPos(hoveredBroadcast.sender);
+            const st = hoveredBroadcast.letter._bcastState;
+            const i = hoveredBroadcast.lineIndex;
+            const nowSec = Date.now() / 1000;
+            const ang = st.angles[i];
+            const len = st.baseLen[i] + st.amps[i] * (0.5 + 0.5 * Math.sin(st.phases[i] + nowSec * st.speeds[i]));
+            const ex = sp.x + Math.cos(ang) * len;
+            const ey = sp.y + Math.sin(ang) * len;
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            ctx.lineTo(ex, ey);
             ctx.stroke();
             ctx.restore();
         }
@@ -2046,8 +2186,9 @@
             // 绘制高亮
             const hoveredNode = interactionHandlers.getHoveredNode();
             const hoveredLink = interactionHandlers.getHoveredLink();
-            const hoveredRing = interactionHandlers.getHoveredRing();
-            drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, getDisplayPos, computeQuadraticControl);
+            const hoveredRing = interactionHandlers.ink && !hoveredNode && !getHoveredRing();
+            const hoveredBroadcast = interactionHandlers.getHoveredBroadcast();
+            drawHighlights(ctx, hoveredLink, hoveredNode, hoveredRing, hoveredBroadcast, getDisplayPos, computeQuadraticControl);
         }
 
         return onTick;
@@ -2454,7 +2595,7 @@
         view = computeInitialLayout(nodes, links, timeScale, view, width, height, 300);
 
         // 7. 绑定交互
-        const interactionState = { canvas, nodes, links, view, tooltip, senderRings, nodeById, getDisplayPos, computeQuadraticControl, distancePointToQuadratic, width, height, dateState };
+        const interactionState = { canvas, nodes, links, view, tooltip, senderRings, nodeById, getDisplayPos, computeQuadraticControl, distancePointToQuadratic, width, height, dateState, lettersData };
         const interactionHandlers = setupInteractions(interactionState);
 
         // 8. 启动渲染
@@ -2814,7 +2955,7 @@ window.__preloadedData = null;
     const distancePointToQuadratic=createDistancePointToQuadratic();
     let view=createInitialView();
     view=computeInitialLayout(nodes,links,timeScale,view,width,height,300);
-    const interactionState={canvas,nodes,links,view,tooltip,senderRings,nodeById,getDisplayPos,computeQuadraticControl,distancePointToQuadratic,width,height,dateState};
+    const interactionState={canvas,nodes,links,view,tooltip,senderRings,nodeById,getDisplayPos,computeQuadraticControl,distancePointToQuadratic,width,height,dateState,lettersData};
     const interactionHandlers=setupInteractions(interactionState);
     const renderState={canvas,ctx,DPR,view,nodes,links,lettersData,nodeById,senderRings,pulseRings,particles,nodeJitter,dateState,minDate,getDisplayPos,getNodeByName,computeQuadraticControl,interactionHandlers};
     const onTick=createRenderLoop(renderState);
@@ -2977,7 +3118,6 @@ window.__preloadedData = null;
     btn.style.border = '1px solid rgba(0,200,255,0.5)';
     btn.style.borderRadius = '6px';
     btn.onclick = () => enableLocalEmailDirMode();
-    document.addEventListener('DOMContentLoaded', () => document.body.appendChild(btn));
 })();
 </script>
 
