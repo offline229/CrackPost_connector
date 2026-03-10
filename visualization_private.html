@@ -251,8 +251,8 @@
     </div>
    
    <!-- 【新增】折线图参数配置独立弹窗 -->
-   <div id="chartConfigPopup" class="flag-menu-popup" style="z-index: 4005; top:120px; left:280px; min-width:180px;">
-       <div class="flag-menu-title">折线图显示项</div>
+   <div id="chartConfigPopup" class="flag-menu-popup" style="z-index: 4005; top:120px; left:280px; min-width:180px; cursor: move;">
+       <div class="flag-menu-title" style="padding-bottom: 5px;">折线图显示项</div>
        <div style="color:#00f7ff; font-size:12px; margin:8px 0 4px 0;">-- 信件数 --</div>
        <label class="flag-menu-item"><input type="checkbox" id="cc_lt" checked> <span style="color:#00f7ff">总封数</span></label>
        <label class="flag-menu-item"><input type="checkbox" id="cc_ls"> <span style="color:#ff77aa">发封数</span></label>
@@ -261,7 +261,7 @@
        <label class="flag-menu-item"><input type="checkbox" id="cc_at" checked> <span style="color:#ffaa00">总附件数</span></label>
        <label class="flag-menu-item"><input type="checkbox" id="cc_as"> <span style="color:#ff8855">发附件数</span></label>
        <label class="flag-menu-item"><input type="checkbox" id="cc_ar"> <span style="color:#dddd55">收附件数</span></label>
-       <div style="color:#ffeeaa; font-size:12px; margin:8px 0 4px 0;">-- 字数量级 (独立比例尺) --</div>
+       <div style="color:#ffeeaa; font-size:12px; margin:8px 0 4px 0;">-- 字数 --</div>
        <label class="flag-menu-item"><input type="checkbox" id="cc_ws" checked> <span style="color:#ffeeaa">今日发字数</span></label>
        <label class="flag-menu-item"><input type="checkbox" id="cc_wr"> <span style="color:#aaffaa">今日收字数</span></label>
        <label class="flag-menu-item"><input type="checkbox" id="cc_wt"> <span style="color:#ffcc55">今日总字数</span></label>
@@ -4050,9 +4050,30 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                    });
                }
            });
+
+          // 【修改】全弹窗拖拽逻辑（放行勾选控件）
+          let ccDragging = false, ccDx = 0, ccDy = 0;
+          if (cfPopup) {
+              cfPopup.addEventListener('mousedown', (e) => {
+                  const tag = e.target.tagName.toLowerCase();
+                  // 遇到可交互的框/字/按钮时不要触发拖拽，才能让你点得动它们
+                  if (tag === 'input' || tag === 'label' || tag === 'span' || tag === 'button') return;
+                  
+                  ccDragging = true;
+                  const rect = cfPopup.getBoundingClientRect();
+                  ccDx = e.clientX - rect.left;
+                  ccDy = e.clientY - rect.top;
+                  e.preventDefault(); 
+              });
+              document.addEventListener('mousemove', (e) => {
+                  if (!ccDragging) return;
+                  cfPopup.style.left = (e.clientX - ccDx) + 'px';
+                  cfPopup.style.top = (e.clientY - ccDy) + 'px';
+              });
+              document.addEventListener('mouseup', () => { ccDragging = false; });
+          }
        }
     });
 </script>
-
 
 </html>
