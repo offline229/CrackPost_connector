@@ -20,21 +20,16 @@ import webbrowser
 from tkcalendar import DateEntry  # 需要安装: pip install tkcalendar
 import imaplib, ssl, sys
 
+# 神秘bug已解决: 用 ENVELOPE 解析出的 subject 和用 RFC822 头解析出的 subject 不同
+# 兼容一天发多封信给同一个人的情况
+# 收	2023-09-05	【4o4 n0t fOUnd	yamuko,猫,咪	A*164	.\email\收\20230905_Fw_A_164_来自【4o4_n0t_fOUnd】的信
 # 待办：
-# 1、下载中断处理
-# 2、保证tsv正确，done
-# 3、网页debug
-# 4、2023-02-26 2022-02-26
-# 5、附件汇总
+# 1、附件汇总
 # 	统计所有收信
 # 	第一步，对所有有明确的发件人 收件人的收信，检索其是否在contenttxt中带有附件 的字样	
 # 	若有，则找到
-# 允许配置下载位置
-# 增加错误处理
-# 增加日志
-# 增加未匹配手动加入功能
-# 提醒回信的类似功能，比如某bu的信你已经x天没回了
-# 打包指南
+#  2、增加未匹配手动加入功能
+# 打包后icon没了
 
 # python -m venv venv
 # venv\Scripts\activate  # Windows
@@ -47,6 +42,7 @@ import imaplib, ssl, sys
 #     --hidden-import PIL.Image `
 #     --hidden-import PIL.ImageTk `
 #     --hidden-import tkcalendar `
+#     --onefile --windowed --icon=icon\CrackPost_v1.ico `
 #     download_gui.py
 
 # ==================== 日志配置（全局，仅一次）====================
@@ -572,7 +568,7 @@ class EmailDownloader:
                     for msg_id, data in response.items():
                         envelope = data[b'ENVELOPE']
                         subject = self.decode_mime_header(envelope.subject.decode()) if envelope.subject else ""
-                        subject = subject.replace(' ', '')  # 入口处去空格
+                        subject = re.sub(r'\s+', '', subject)  # 入口处去空格
                         # 进一步筛选
                         if subject_pattern and not re.search(subject_pattern, subject, re.IGNORECASE):
                             continue
@@ -653,7 +649,7 @@ class EmailDownloader:
                             response = self.client.fetch([msg_id], ['ENVELOPE'])
                             envelope = response[msg_id][b'ENVELOPE']
                             subject = self.decode_mime_header(envelope.subject.decode()) if envelope.subject else ""
-                            subject = subject.replace(' ', '')  # 入口处去空格
+                            subject = re.sub(r'\s+', '', subject)  # 入口处去空格
                             
                             # 检查发件人
                             sender = ""
@@ -801,8 +797,13 @@ class EmailDownloader:
         metadata = {}
         
         # 主题
-        subject = self.decode_mime_header(msg['subject'] or '')
-        metadata['subject'] = subject.replace(' ', '')
+        raw_subject = msg['subject'] or ''
+        subject = self.decode_mime_header(raw_subject)
+
+        # 如果原始内容是 Q-encoding，则应用 _ => space
+        if '?Q?' in raw_subject.upper():
+            subject = subject.replace('_', ' ')
+        metadata['subject'] = re.sub(r'\s+', '', subject)
         
         # 发件人
         metadata['sender'] = email.utils.parseaddr(msg['from'])[1]
@@ -1019,7 +1020,7 @@ class EmailDownloader:
             
             # 3. 确定存储目录
             email_dir = self._determine_email_directory(metadata)
-            
+
             # 4. 解析收件人
             to_addrs = self._parse_recipients(msg)
             
@@ -1287,7 +1288,7 @@ class EmailDownloader:
 
             receiver_name = ""
             subject = result.get('subject', '')
-            subject = subject.replace(' ', '')
+            subject = re.sub(r'\s+', '_', subject)
             letter_type = self.extract_letter_type(subject)
             if not letter_type:
                 print(f"[DEBUG] letter_type解析失败，输入subject: '{subject}' 路径: {result.get('directory','')}")
@@ -1393,54 +1394,51 @@ class EmailDownloaderGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("邮件下载工具")
-        self.root.geometry("800x900")
-        self.root.minsize(800, 900)
-        
-        # 创建下载器实例
-        self.downloader = EmailDownloader()
-        
-        # 设置图标
+
+        # ✅ 先设置标题栏和任务栏图标（必须在窗口显示前）
         try:
-            project_root = Path(os.path.dirname(os.path.abspath(__file__))).resolve()
-            icon_dir = project_root / "icon"
+            icon_dir = script_dir / "icon"
             ico_path = icon_dir / "CrackPost.ico"
             png_path = icon_dir / "CrackPost_v1.png"
 
-            # Windows 下优先使用 .ico 作为窗口图标（任务栏/标题栏）
+            # Windows 任务栏和标题栏图标
             if ico_path.exists() and sys.platform.startswith("win"):
+                # 如果窗口已经显示过，可以先隐藏再显示，确保任务栏更新
+                self.root.withdraw()
+                self.root.iconbitmap(str(ico_path))
+                self.root.deiconify()
+
+            # 跨平台小图标
+            if png_path.exists():
+                pil_img = Image.open(str(png_path)).convert("RGBA")
+                small = pil_img.resize((32, 32), Image.LANCZOS)
+                self._app_icon_small = ImageTk.PhotoImage(small)
                 try:
-                    self.root.iconbitmap(str(ico_path))
+                    self.root.iconphoto(True, self._app_icon_small)
                 except Exception:
                     pass
 
-            # 若存在 PNG，则用 PIL 生成小图用于 root.iconphoto（跨平台）和大图用于界面内显示
-            if png_path.exists():
-                pil_img = Image.open(str(png_path)).convert("RGBA")
-                # 小图（用于 root.iconphoto，32x32）
-                try:
-                    small = pil_img.resize((32, 32), Image.LANCZOS)
-                    self._app_icon_small = ImageTk.PhotoImage(small)
-                    try:
-                        self.root.iconphoto(True, self._app_icon_small)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                # 大图（用于界面内显示，64x64）
-                try:
-                    large = pil_img.resize((64, 64), Image.LANCZOS)
-                    self._app_icon_large = ImageTk.PhotoImage(large)
-                except Exception:
-                    self._app_icon_large = None
-        except Exception:
-            pass
-            
+                # 大图用于界面显示
+                large = pil_img.resize((64, 64), Image.LANCZOS)
+                self._app_icon_large = ImageTk.PhotoImage(large)
+
+        except Exception as e:
+            print(f"图标设置失败: {e}")
+
+        # 设置窗口标题和大小
+        self.root.title("地缝邮件下载工具")
+        self.root.geometry("800x850")
+        self.root.minsize(800, 850)
+
+        # 创建下载器实例
+        self.downloader = EmailDownloader()
+
         # 创建主界面
         self.create_widgets()
-        
+
         # 检查配置并初始化
         self.initialize_app()
+
     
 # --- 注册OC函数修复 ---
     def register_oc(self):
@@ -1986,30 +1984,50 @@ class EmailDownloaderGUI:
         ttk.Label(search_frame, text="封邮件").grid(row=4, column=2, sticky=tk.W, pady=5)
         
         # 搜索按钮
+        # ✅ 修改：按钮框架（搜索、清除、全选、下载并列）
         button_frame = ttk.Frame(self.search_frame)
         button_frame.pack(fill=tk.X, pady=10)
         
+        # 左侧：搜索和清除按钮
         search_btn = ttk.Button(button_frame, text="搜索邮件", command=self.search_emails)
         search_btn.pack(side=tk.LEFT, padx=10)
         
         clear_btn = ttk.Button(button_frame, text="清除条件", command=self.clear_search)
         clear_btn.pack(side=tk.LEFT, padx=10)
+
+        # ✅ 新增：一键处理按钮
+        one_click_btn = ttk.Button(
+            button_frame, 
+            text="⚡ 一键处理", 
+            command=self.one_click_process,
+        )
+        one_click_btn.pack(side=tk.LEFT, padx=10)        
         
-        # 搜索结果框架（垂直高度缩小：父框不再扩展占满纵向空间，Treeview 限制可见行数）
+        # 右侧：全选和下载按钮
+        download_selected_btn = ttk.Button(button_frame, text="下载选中邮件", 
+                                        command=self.download_selected)
+        download_selected_btn.pack(side=tk.RIGHT, padx=10)
+        
+        self.select_all_var = tk.BooleanVar()
+        select_all_check = ttk.Checkbutton(button_frame, text="全选", 
+                                        variable=self.select_all_var, 
+                                        command=self.toggle_select_all)
+        select_all_check.pack(side=tk.RIGHT, padx=10)
+        
+        # 搜索结果框架
         results_frame = ttk.LabelFrame(self.search_frame, text="搜索结果")
-        # 通过 fill=tk.X + expand=False 限制父框纵向占用，调整 pady 让上下间距更紧凑
         results_frame.pack(fill=tk.X, expand=False, pady=6)
         
-        # 创建表格（height 控制可见行数，越小越短）
+        # 创建表格
         columns = ("序号", "日期", "发件人", "主题")
-        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="headings", selectmode="extended", height=8)
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="headings", 
+                                        selectmode="extended", height=8)
         self.results_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
+        
         # 添加滚动条
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         self.results_tree.configure(yscroll=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         
         # 设置列宽和标题
         self.results_tree.heading("序号", text="序号")
@@ -2022,7 +2040,6 @@ class EmailDownloaderGUI:
         self.results_tree.column("发件人", width=200)
         self.results_tree.column("主题", width=400)
         
-        
         # 状态和进度条框架
         status_frame = ttk.Frame(self.search_frame)
         status_frame.pack(fill=tk.X, pady=5)
@@ -2033,20 +2050,6 @@ class EmailDownloaderGUI:
         
         self.search_progress = ttk.Progressbar(status_frame, orient=tk.HORIZONTAL, length=200, mode='determinate')
         self.search_progress.pack(side=tk.RIGHT, padx=5)
-        
-        # 下载按钮框架
-        download_frame = ttk.Frame(self.search_frame)
-        download_frame.pack(fill=tk.X, pady=10)
-        
-        self.select_all_var = tk.BooleanVar()
-        select_all_check = ttk.Checkbutton(download_frame, text="全选", 
-                                         variable=self.select_all_var, 
-                                         command=self.toggle_select_all)
-        select_all_check.pack(side=tk.LEFT, padx=10)
-        
-        download_selected_btn = ttk.Button(download_frame, text="下载选中邮件", 
-                                        command=self.download_selected)
-        download_selected_btn.pack(side=tk.RIGHT, padx=10)
 
     def register_oc(self):
         val = self.oc_input_var.get().strip()
@@ -2091,7 +2094,7 @@ class EmailDownloaderGUI:
         results_frame.pack(fill=tk.BOTH, expand=True, pady=6)  # 允许纵向扩展
 
         # 创建文本区域，height 可以适当增大
-        self.download_log = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, height=18)
+        self.download_log = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, height=15)
         self.download_log.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)  # 允许纵向扩展
 
         # 提示块
@@ -2576,6 +2579,177 @@ class EmailDownloaderGUI:
         except Exception as e:
             messagebox.showerror("错误", f"无法打开下载报告: {str(e)}")
         
+    def one_click_process(self):
+        """一键处理：自动调用现有函数（搜索 → 下载 → 猜测 → 可视化）"""
+        
+        # 检查连接状态
+        if not self.downloader.client:
+            if not self.downloader.connect_to_email():
+                messagebox.showerror("错误", "请先登录邮箱")
+                return
+        
+        # 检查文件夹选择
+        folder = self.folder_var.get()
+        if not folder:
+            messagebox.showerror("错误", "请先选择邮箱文件夹")
+            return
+        
+        # 确认操作
+        if not messagebox.askyesno(
+            "确认操作", 
+            "一键处理将执行以下操作：\n\n"
+            "1. 使用规则1和规则2搜索邮件\n"
+            "2. 自动下载所有搜索到的邮件\n"
+            "3. 智能猜测收件人\n"
+            "4. 打开可视化网络\n\n"
+            "此过程可能需要较长时间，是否继续？"
+        ):
+            return
+        
+        # 在独立线程中运行，避免阻塞UI
+        process_thread = threading.Thread(target=self._run_one_click_process)
+        process_thread.daemon = True
+        process_thread.start()
+
+
+    def _run_one_click_process(self):
+        """一键处理的实际执行逻辑（在独立线程中运行）"""
+        try:
+            # ===== 步骤1：规则1搜索（收信） =====
+            self.root.after(0, lambda: self.search_status_var.set("正在使用规则1搜索..."))
+            self.root.after(0, lambda: self.search_mode_var.set("config"))
+            self.root.after(0, lambda: self.rule_choice_var.set("1"))
+            self.root.after(0, self.toggle_search_mode)
+            
+            # ✅ 直接调用搜索逻辑（不通过UI事件）
+            folder = self.folder_var.get()
+            rule1 = self.downloader.get_default_rule(1)
+            
+            def update_progress_rule1(progress, found_count):
+                self.search_progress['value'] = progress / 2  # 占总进度的50%
+                self.search_status_var.set(f"[规则1] 搜索中... {progress}% 已找到 {found_count} 封")
+                self.root.update()
+            
+            results_rule1 = self.downloader.search_emails_advanced(
+                folder=folder,
+                subject_pattern=rule1.get('subject_pattern', ''),
+                from_address=rule1.get('from', ''),
+                to_address=rule1.get('to', ''),
+                callback=update_progress_rule1,
+                max_emails=1500
+            )
+            logger.info(f"规则1搜索完成，找到 {len(results_rule1)} 封邮件")
+            
+            # ===== 步骤2：规则2搜索（发信） =====
+            self.root.after(0, lambda: self.search_status_var.set("正在使用规则2搜索..."))
+            rule2 = self.downloader.get_default_rule(2)
+            
+            def update_progress_rule2(progress, found_count):
+                self.search_progress['value'] = 50 + progress / 2  # 占总进度的50%
+                self.search_status_var.set(f"[规则2] 搜索中... {progress}% 已找到 {found_count} 封")
+                self.root.update()
+            
+            results_rule2 = self.downloader.search_emails_advanced(
+                folder=folder,
+                subject_pattern=rule2.get('subject_pattern', ''),
+                from_address=rule2.get('from', ''),
+                to_address=rule2.get('to', ''),
+                callback=update_progress_rule2,
+                max_emails=1500
+            )
+            logger.info(f"规则2搜索完成，找到 {len(results_rule2)} 封邮件")
+            
+            # ===== 步骤3：合并结果并去重 =====
+            seen_ids = set()
+            merged_results = []
+            
+            for email_info in results_rule1 + results_rule2:
+                email_id = email_info.get('id')
+                if email_id not in seen_ids:
+                    seen_ids.add(email_id)
+                    merged_results.append(email_info)
+            
+            logger.info(f"合并后共 {len(merged_results)} 封邮件（去重后）")
+            
+            # 保存到 search_results
+            self.downloader.search_results = merged_results
+            
+            # 更新搜索结果显示
+            self.root.after(0, lambda: self.update_search_results(merged_results))
+            self.root.after(0, lambda: self.search_status_var.set(f"搜索完成，共找到 {len(merged_results)} 封邮件"))
+            
+            # ===== 步骤4：切换到下载选项卡 =====
+            self.root.after(0, lambda: self.notebook.select(self.download_frame))
+            time.sleep(0.3)  # 短暂等待UI切换
+            
+            # ===== 步骤5：自动下载所有邮件 =====
+            if not merged_results:
+                self.root.after(0, lambda: messagebox.showinfo("提示", "未找到符合条件的邮件"))
+                return
+            
+            self.root.after(0, lambda: self.download_status_var.set(f"准备下载 {len(merged_results)} 封邮件..."))
+            self.root.after(0, lambda: self.clear_download_log())
+            
+            def update_download_progress(progress, current, total):
+                self.download_progress['value'] = progress
+                self.download_status_var.set(f"下载中... {progress}% ({current}/{total})")
+                self.root.update()
+                
+                if current <= len(merged_results):
+                    email_info = merged_results[current - 1]
+                    status = email_info.get('status', '')
+                    reason = email_info.get('reason', '')
+                    
+                    if status == 'skipped':
+                        msg = f"[{current}/{total}] ⊙ 跳过: {email_info.get('subject', '')} ({reason})\n"
+                    elif status == 'failed':
+                        msg = f"[{current}/{total}] ✗ 失败: {email_info.get('subject', '')} ({reason})\n"
+                    elif status == 'success':
+                        msg = f"[{current}/{total}] ✓ 已下载: {email_info.get('subject', '')}\n"
+                    else:
+                        msg = f"[{current}/{total}] → 处理中: {email_info.get('subject', '')}\n"
+                    
+                    self.root.after(0, lambda m=msg: self.add_download_log(m))
+            
+            download_results = self.downloader.download_multiple_emails(merged_results, update_download_progress)
+            
+            success_count = len([r for r in download_results if r.get('status') == 'success'])
+            skipped_count = len([r for r in download_results if r.get('status') == 'skipped'])
+            failed_count = len([r for r in download_results if r.get('status') == 'failed'])
+            
+            self.root.after(0, lambda: self.download_status_var.set(f"下载完成: 成功{success_count} 跳过{skipped_count} 失败{failed_count}"))
+            
+            # ===== 步骤6：智能猜测收件人 =====
+            self.root.after(0, lambda: self.download_status_var.set("正在智能猜测收件人..."))
+            self.root.after(0, lambda: self.add_download_log("\n开始智能猜测收件人...\n"))
+            
+            # 调用智能猜测函数（在主线程中执行，因为它会弹窗）
+            self.root.after(0, self.smart_guess_receivers)
+            time.sleep(2)  # 等待猜测完成
+            
+            # ===== 步骤7：打开可视化HTML =====
+            self.root.after(0, lambda: self.download_status_var.set("正在打开可视化网络..."))
+            self.root.after(0, lambda: self.add_download_log("\n正在打开可视化网络...\n"))
+            
+            import webbrowser
+            root_dir = Path(self.root_dir_var.get())
+            html_path = root_dir / "visualization_private.html"
+            
+            if not html_path.exists():
+                self.root.after(0, lambda: messagebox.showwarning("警告", f"未找到可视化文件:\n{html_path}"))
+            else:
+                url = "file:///" + str(html_path).replace("\\", "/")
+                webbrowser.open_new_tab(url)
+                self.root.after(0, lambda: self.add_download_log("✓ 可视化网络已打开\n"))
+            
+            # ===== 完成 =====
+            self.root.after(0, lambda: self.download_status_var.set("一键处理完成！"))
+            self.root.after(0, lambda: messagebox.showinfo("完成", "一键处理已完成！\n\n已自动打开可视化网络"))
+            
+        except Exception as e:
+            logger.error(f"一键处理出错: {e}")
+            self.root.after(0, lambda: messagebox.showerror("错误", f"一键处理失败: {str(e)}"))
+            self.root.after(0, lambda: self.download_status_var.set("一键处理失败"))
 
 # 主程序入口
 def main():
