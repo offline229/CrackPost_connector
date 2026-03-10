@@ -1223,17 +1223,27 @@ class EmailDownloader:
         existing_oc = set()
         existing_mails = set()
         existing_rows = []
+        existing_aliases_line = "" # 【新增】：保存可能的别名行
+        
         if global_result_path.exists():
             with open(global_result_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
                 if lines:
-                    # 解析 OC
-                    if lines[0].startswith("oc_registerdata"):
-                        oc_line = lines[0].strip().split('\t')
-                        if len(oc_line) > 1 and oc_line[1]:
-                            existing_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()])
+                    data_start_idx = 0
+                    for i, line in enumerate(lines):
+                        if line.startswith("oc_registerdata"):
+                            oc_line = line.strip().split('\t')
+                            if len(oc_line) > 1 and oc_line[1]:
+                                existing_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()])
+                        elif line.startswith("oc_aliases"):
+                            # 【新增】：提取并保护旧别名数据
+                            existing_aliases_line = line.strip()
+                        elif line.startswith("收/发类型") or line.startswith("收/发"):
+                            data_start_idx = i
+                            break
+                            
                     # 解析邮件（关键：用更多字段构建唯一键）
-                    for line in lines[2:]:
+                    for line in lines[data_start_idx+1:]:
                         cols = line.strip().split('\t')
                         if len(cols) >= 6:
                             # 唯一标识：发件人 + 日期 + 主题/类型 + 路径
@@ -1342,6 +1352,8 @@ class EmailDownloader:
         # 5. 写入 TSV
         with open(global_result_path, "w", encoding="utf-8") as f:
             f.write(f"oc_registerdata\t{','.join(all_oc)}\n")
+            if existing_aliases_line: # 【新增】：写回别名行
+                f.write(existing_aliases_line + "\n")
             f.write("收/发类型\t发信日期\t发件人\t收件人\t信件类型\t信件下载位置\n")
             for row in final_rows:
                 f.write(row + "\n")
@@ -1427,8 +1439,8 @@ class EmailDownloaderGUI:
 
         # 设置窗口标题和大小
         self.root.title("地缝邮件下载工具")
-        self.root.geometry("800x850")
-        self.root.minsize(800, 850)
+        self.root.geometry("800x915")
+        self.root.minsize(800, 915)
 
         # 创建下载器实例
         self.downloader = EmailDownloader()
@@ -1901,12 +1913,25 @@ class EmailDownloaderGUI:
         oc_info_label = ttk.Label(oc_frame, text="(可多次注册多个OC)", foreground="gray")
         oc_info_label.pack(side=tk.LEFT, padx=5)
         
-        # 文件夹选择框架
-        folder_frame = ttk.LabelFrame(self.search_frame, text="选择邮箱文件夹", padding=(10, 5))
-        folder_frame.pack(fill=tk.X, pady=5)
-    
+        # 【新增】别名注册框架
+        alias_frame = ttk.LabelFrame(self.search_frame, text="注册OC别名 (绑定关系为 主名=别名1=别名2)", padding=(10, 5))
+        alias_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(alias_frame, text="主名:").pack(side=tk.LEFT, padx=5)
+        self.alias_main_var = tk.StringVar()
+        # 允许手动输入也允许下拉选择（state="normal" 可编辑）
+        self.alias_main_combo = ttk.Combobox(alias_frame, textvariable=self.alias_main_var, width=15, state="normal")
+        self.alias_main_combo.pack(side=tk.LEFT, padx=5)
+        # 点击或获得焦点时刷新下拉列表，但不会阻止手动输入
+        self.alias_main_combo.bind('<Button-1>', self.update_main_oc_list)
+        self.alias_main_combo.bind('<FocusIn>', self.update_main_oc_list)
 
-
+        ttk.Label(alias_frame, text="= 别名(多个逗号分隔):").pack(side=tk.LEFT, padx=5)
+        self.alias_sub_var = tk.StringVar()
+        ttk.Entry(alias_frame, textvariable=self.alias_sub_var, width=25).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(alias_frame, text="确定别名", command=self.register_alias).pack(side=tk.LEFT, padx=5)
+        
         # 文件夹选择框架
         folder_frame = ttk.LabelFrame(self.search_frame, text="选择邮箱文件夹", padding=(10, 5))
         folder_frame.pack(fill=tk.X, pady=5)
@@ -2073,6 +2098,111 @@ class EmailDownloaderGUI:
                         f.writelines(lines)
             messagebox.showinfo("注册成功", f"已注册: {val}")
             self.oc_input_var.set("")
+
+    # 【新增】下拉菜单点击前动态加载 TSV 中的 OC 列表
+    def update_main_oc_list(self, event=None):
+        global_result_path = self.downloader.base_dir / "global_result.tsv"
+        oc_list = []
+        if os.path.exists(global_result_path):
+            with open(global_result_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                if lines and lines[0].startswith("oc_registerdata"):
+                    oc_line = lines[0].strip().split('\t')
+                    if len(oc_line) > 1 and oc_line[1]:
+                        for item in oc_line[1].split(','):
+                            name = item.split('_')[0]
+                            if name:
+                                oc_list.append(name)
+        # 用集合去重后放入下拉选项
+        self.alias_main_combo['values'] = sorted(list(set(oc_list)))
+
+    # 【新增】点击“确定别名”按钮的执行逻辑
+    def register_alias(self):
+        main_name = self.alias_main_var.get().strip()
+        sub_names_str = self.alias_sub_var.get().strip()
+        
+        if not main_name or not sub_names_str:
+            messagebox.showwarning("提示", "主名和别名不能为空")
+            return
+        # 若主名为手动输入且未在 oc_registerdata 中，自动追加并写回 global_result.tsv（避免无主名）
+        try:
+            if main_name and main_name not in self.downloader.oc_registerdata:
+                self.downloader.oc_registerdata.append(main_name)
+                global_result_path = self.downloader.base_dir / "global_result.tsv"
+                if os.path.exists(global_result_path):
+                    with open(global_result_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    if lines and lines[0].startswith("oc_registerdata"):
+                        oc_line = lines[0].strip().split('\t')
+                        all_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()] if len(oc_line) > 1 else [])
+                        all_oc.update(self.downloader.oc_registerdata)
+                        lines[0] = f"oc_registerdata\t{','.join(sorted(all_oc))}\n"
+                        with open(global_result_path, "w", encoding="utf-8") as f:
+                            f.writelines(lines)
+        except Exception:
+            pass
+
+
+        # 兼容中文逗号和多余的等号切割
+        sub_names = [x.strip() for x in sub_names_str.replace('，', ',').replace('=', ',').split(',') if x.strip()]
+        if not sub_names:
+            return
+            
+        global_result_path = self.downloader.base_dir / "global_result.tsv"
+        if not os.path.exists(global_result_path):
+            messagebox.showwarning("提示", "未找到 global_result.tsv，请先下载邮件生成记录。")
+            return
+            
+        with open(global_result_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            
+        aliases_dict = {}
+        alias_line_idx = -1
+        
+        # 查找是否存在 oc_aliases 这一行
+        for i, line in enumerate(lines):
+            if line.startswith("oc_aliases"):
+                alias_line_idx = i
+                cols = line.strip().split('\t')
+                if len(cols) > 1 and cols[1]:
+                    # 格式如 a=b=c,m=n
+                    for group in cols[1].split(','):
+                        group = group.strip()
+                        if group:
+                            parts = group.split('=')
+                            if len(parts) > 1:
+                                aliases_dict[parts[0]] = parts[1:]
+                break
+            elif line.startswith("收/发类型"):
+                break
+                
+        # 追加新别名
+        if main_name in aliases_dict:
+            aliases_dict[main_name].extend(sub_names)
+            # 去重
+            aliases_dict[main_name] = list(set(aliases_dict[main_name]))
+        else:
+            aliases_dict[main_name] = list(set(sub_names))
+            
+        # 重构 oc_aliases 行字符串
+        alias_str_list = []
+        for k, v in aliases_dict.items():
+            if v:
+                alias_str_list.append(f"{k}={'='.join(v)}")
+        new_alias_line = f"oc_aliases\t{','.join(alias_str_list)}\n"
+        
+        # 写回
+        if alias_line_idx != -1:
+            lines[alias_line_idx] = new_alias_line
+        else:
+            # 插入到 oc_registerdata 后（默认在第2行）
+            lines.insert(1, new_alias_line)
+            
+        with open(global_result_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+            
+        messagebox.showinfo("成功", f"成功添加别名: {main_name} = {'='.join(sub_names)}")
+        self.alias_sub_var.set("")
 
     def create_download_tab(self):
         """创建下载选项卡"""

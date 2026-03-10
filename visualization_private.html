@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CrackPost Visualization — Canvas High-Perf</title>
+    <title>CrackPost Visualization</title>
 
     <!-- 如果你需要完全本地化，请下载 d3.v7.min.js 到本目录并将下面这行替换成本地引用（例如 ./libs/d3.v7.min.js） -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -216,33 +216,58 @@
 </head>
 
 <body>
-    <button id="flagMenuBtn" class="flag-menu-btn">☰ 调整网络</button>
+    <button id="flagMenuBtn" class="flag-menu-btn">☰ 菜单</button>
     <div id="flagMenuPopup" class="flag-menu-popup">
         <div class="flag-menu-title">可选功能</div>
         <label class="flag-menu-item">
             <input type="checkbox" id="toggleLastLetter" checked>
-            <span>高亮未回复信件</span>
+            <span>点亮未回复信件</span>
         </label>
-        
-        <!-- 【新增】每日数据框控制开关 -->
-        <label class="flag-menu-item">
-            <input type="checkbox" id="toggleDailyStats">
-            <span>显示每日数据框</span>
-        </label>
-        <div class="flag-menu-subitem">
-            <span>图表时间窗口(天)</span>
-            <input type="number" id="dailyChartWindow" value="14" min="3" max="90" class="pixel-input">
-        </div>
 
         <!-- 【新增】附件收纳窗控制开关 -->
         <label class="flag-menu-item">
             <input type="checkbox" id="toggleAttachmentWindow">
-            <span>显示附件收纳窗</span>
+            <span>显示附件收纳柜</span>
         </label>
 
+        <!-- 【新增】每日数据框控制开关 -->
+        <label class="flag-menu-item">
+            <input type="checkbox" id="toggleDailyStats">
+            <span>显示每日数据统计</span>
+        </label>
+        <div class="flag-menu-subitem">
+            <span>折线图时间范围(天)</span>
+            <input type="number" id="dailyChartWindow" value="30" min="3" max="90" class="pixel-input">
+        </div>
+       <!-- 【新增】调整折线图控制按钮 -->
+       <div class="flag-menu-subitem" style="margin-top:-6px; margin-bottom:12px;">
+           <span>折线参数</span>
+           <button id="openChartConfigBtn" class="pixel-input" style="width: auto; cursor:pointer;">设置折线参数...</button>
+       </div>
+        <!-- 【新增】附件收纳窗控制开关 -->
+        <label class="flag-menu-item">
         <!-- 可以在这里添加更多flag -->
         <button id="flagMenuCloseBtn" class="flag-menu-close">关闭</button>
     </div>
+   
+   <!-- 【新增】折线图参数配置独立弹窗 -->
+   <div id="chartConfigPopup" class="flag-menu-popup" style="z-index: 4005; top:120px; left:280px; min-width:180px;">
+       <div class="flag-menu-title">折线图显示项</div>
+       <div style="color:#00f7ff; font-size:12px; margin:8px 0 4px 0;">-- 信件数 --</div>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_lt" checked> <span style="color:#00f7ff">总封数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_ls"> <span style="color:#ff77aa">发封数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_lr"> <span style="color:#99ff99">收封数</span></label>
+       <div style="color:#ffaa00; font-size:12px; margin:8px 0 4px 0;">-- 附件数 --</div>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_at" checked> <span style="color:#ffaa00">总附件数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_as"> <span style="color:#ff8855">发附件数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_ar"> <span style="color:#dddd55">收附件数</span></label>
+       <div style="color:#ffeeaa; font-size:12px; margin:8px 0 4px 0;">-- 字数量级 (独立比例尺) --</div>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_ws" checked> <span style="color:#ffeeaa">今日发字数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_wr"> <span style="color:#aaffaa">今日收字数</span></label>
+       <label class="flag-menu-item"><input type="checkbox" id="cc_wt"> <span style="color:#ffcc55">今日总字数</span></label>
+       <button id="closeChartConfigBtn" class="flag-menu-close" style="width:100%">确定</button>
+   </div>
+
     <div class="grid-background"></div>
     <h1>CrackPost Visualization</h1>
     
@@ -251,8 +276,15 @@
         <div class="attach-hdr" id="attachHdr">
             <span>附件收纳柜</span>
             <div>
-                <button id="attachSortBtn" title="切换排序列">🔽 倒序</button>
-                <button id="attachCloseBtn" title="关闭">✕</button>
+                <!-- 筛选：全部 / 收 / 发 -->
+                <select id="attachFilterSelect" title="筛选收/发">
+                    <option value="all">全部</option>
+                    <option value="收">收</option>
+                    <option value="发">发</option>
+                </select>
+                <!-- 按日期排序，切换升/降 -->
+                <button id="attachSortBtn" title="按日期排序(点击切换升/降)">倒序</button>
+                 <button id="attachCloseBtn" title="关闭">✕</button>
             </div>
         </div>
         <div class="attach-body" id="attachListBody"></div>
@@ -262,10 +294,22 @@
     <!-- 【新增】右上角数据面板 -->
     <div id="dailyStatsPanel" class="daily-stats-panel">
         <div class="daily-stats-title" id="stDateTitle">每日数据 (----/--/--)</div>
-        <div class="stats-text-row">信件 (收 / 发): <span id="stLetters">0 / 0</span></div>
-        <div class="stats-text-row">附件 (收 / 发): <span id="stAtts">0 / 0</span></div>
-        <!-- 【修复】仅展示发信字数 -->
-        <div class="stats-text-row">发信字数: <span id="stWords">0</span></div>
+        
+        <div class="stats-text-row">
+            <div><span style="color:rgba(0, 247, 255, 0.8); margin-right:4px;">■</span>信件 (收 / 发):</div>
+            <span id="stLetters">0 / 0 封</span>
+        </div>
+        
+        <div class="stats-text-row">
+            <div><span style="color:rgba(255, 170, 0, 0.8); margin-right:4px;">■</span>附件 (收 / 发):</div>
+            <span id="stAtts">0 / 0 件</span>
+        </div>
+        
+        <div class="stats-text-row">
+            <div>&nbsp; 今日写了:</div>
+            <span id="stWords">0 字</span>
+        </div>
+        
         <div class="chart-container-ui">
             <canvas id="dailyChartCanvas" width="280" height="100"></canvas>
         </div>
@@ -299,12 +343,8 @@
 <script>
 
     // 待办：
-    // 增加附件收纳
-    // 增加每日收件数
     // 导入其他人的信
     // 去重可能需要检查
-    // 特殊路径 无法读取信件（尝试路径：./email/收/20230920_Fw_A195来自%23004F的信/content.txt）
-
     //// ========================= 数据加载 =========================
 
     // 从tsv文件里读取所有需要的数据
@@ -347,7 +387,7 @@
         };
     }
 
-    /**
+    /**ring} rawPath - 原始
      * 给出一条存储路径，返回可尝试的 content.txt 候选列表（相对/绝对均支持）
      * @param {string} rawPath
      * @returns {string[]}
@@ -453,12 +493,16 @@
      * 加载且解析附件 TSV 文件
      * 每条文字附件或文件附件，都会被展开为一条独立记录
      */
-    async function loadAttachmentData() {
+    async function loadAttachmentData(aliasMap = new Map()) { // 【修改】传入别名表
         try {
             const response = await fetch('./email/attachment_report.tsv');
             if (!response.ok) return [];
             const data = await response.text();
             
+            // 姓名转换辅助工具
+            const resolveName = (n) => aliasMap.get(n) || n;
+            const splitAndResolve = (str) => (str || '').split(',').map(s => resolveName(s.trim())).filter(Boolean).join(',');
+
             // 妥妥的 TSV 解析（兼容文字附件里的真实换行符）
             const rawLines = data.trim().split('\n');
             const validLines = [];
@@ -486,11 +530,12 @@
 
                 const sendType = (cols[0] || '').trim();
                 const dateStr = (cols[1] || '').trim();
-                const sender = (cols[2] || '').trim();
-                const receiver = (cols[3] || '').trim();
+                const sender = resolveName((cols[2] || '').trim());
+                const receiver = splitAndResolve((cols[3] || '').trim());
+
                 // cols[4] 信件类型, cols[5] 下载位置, cols[6] 文字数, cols[7] 文件数...
                 const textAttsRaw = cols[8] ? cols[8].trim() : '';
-                const fileAttsRaw = cols[9] ? cols[9].trim() : '';
+                const fileAttsRaw = cols[9] ? cols[9].trim() : ''; // 【修复】在此处补充 fileAttsRaw 的定义
 
                 // 处理文字附件（换行符分割）
                 if (textAttsRaw) {
@@ -541,16 +586,57 @@
             const lines = data.trim().split('\n');
 
             // 解析 OC 注册
-            const ocData = parseOcRegisterData(lines[0] || '');
+            const ocDataRaw = parseOcRegisterData(lines[0] || '');
 
-            const emailMap = new Map(); // 使用 Map 来合并重复的邮件记录
+            // 【新增】解析前置寻找及构建别名系统
+            const aliasMap = new Map();
+            let dataStartIdx = 0;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('oc_aliases')) {
+                    const cols = lines[i].split('\t');
+                    if (cols.length > 1 && cols[1]) {
+                        cols[1].split(',').forEach(g => {
+                            const parts = g.split('=').map(x => x.trim()).filter(Boolean);
+                            if (parts.length > 1) {
+                                const mainName = parts[0];
+                                for (let j = 1; j < parts.length; j++) {
+                                    aliasMap.set(parts[j], mainName);
+                                }
+                            }
+                        });
+                    }
+                } else if (lines[i].match(/^收\/发/)) {
+                    dataStartIdx = i; // 找到真实的数据起点
+                    break;
+                }
+            }
 
-            for (let i = 2; i < lines.length; i++) {
+            const resolveName = (n) => aliasMap.get(n) || n;
+            const splitAndResolve = (str) => (str || '').split(',').map(s => resolveName(s.trim())).filter(Boolean).join(',');
+
+            // 【新增】合并整理 OC 名（将可能被分散注册的别名整合归并为主名，注册时间取最早）
+            const ocDataMap = new Map();
+            ocDataRaw.forEach(oc => {
+                const mainName = resolveName(oc.name);
+                if (!ocDataMap.has(mainName) || new Date(oc.registerDate) < new Date(ocDataMap.get(mainName).registerDate)) {
+                    ocDataMap.set(mainName, { name: mainName, registerDate: oc.registerDate });
+                }
+            });
+            const ocData = Array.from(ocDataMap.values());
+
+            const emailMap = new Map(); 
+
+            // 【修改】从动态捕捉的标题列下开始读取（无论之前是否有别名行占位）
+            for (let i = dataStartIdx + 1; i < lines.length; i++) {
                 const cols = lines[i].split('\t');
                 if (cols.length < 6) continue;
 
                 const emailObj = parseEmailRow(cols);
                 emailObj.__tsvLine = i + 1; // 记录原始 TSV 行号
+
+                // 【新增】直接覆盖原始信件信息的发/收人物名字，全面主名化
+                emailObj.sender = resolveName(emailObj.sender);
+                emailObj.receiver = splitAndResolve(emailObj.receiver);
 
                 // 为 C 类信件创建一个唯一的标识符，用于合并 "发" 和 "收"
                 let uniqueKey = null;
@@ -587,8 +673,8 @@
                 }
             });
 
-            // 同步发起附件数据加载请求
-            const attachmentsPromise = loadAttachmentData();
+            // 【修改】同步发起附件数据加载请求时，把做好的别名表传进去！
+            const attachmentsPromise = loadAttachmentData(aliasMap);
 
             if (fetchTasks.length) {
                 await Promise.all(fetchTasks);
@@ -986,7 +1072,6 @@
         let hoveredRing = null;
         let hoveredBroadcast = null;
         let selectedNode = null;
-        let expandedItem = null;
         let dragStart = null;    // 记录拖拽起点
         let dragMoved = false;   // 是否发生了拖动
         // 客户端坐标 -> 世界坐标
@@ -1185,7 +1270,6 @@
             if (!hoveredNode) {
                 const link = findLinkAtWorld(worldX, worldY);
                 if (link && link !== hoveredLink) {
-                    if (expandedItem) expandedItem = null;
                     hoveredLink = link;
                     hoveredRing = null;
                     const letter = link.rawLetter || {};
@@ -1207,7 +1291,6 @@
                 if (!hoveredLink && !hoveredNode) {
                     const ringHit = findRingAtWorld(worldX, worldY);
                     if (ringHit) {
-                        if (expandedItem) expandedItem = null;
                         hoveredLink = null;
                         hoveredNode = null;
                         hoveredRing = ringHit;
@@ -1229,7 +1312,6 @@
                 if (!hoveredLink && !hoveredNode && !hoveredRing) {
                     const bcastHit = findBroadcastLineAtWorld(worldX, worldY);
                     if (bcastHit) {
-                        if (expandedItem) expandedItem = null;
                         hoveredBroadcast = bcastHit; // ← 新增状态变量
                         const letter = bcastHit.letter;
                         const sender = bcastHit.sender.id;
@@ -1354,7 +1436,11 @@
                 const rawLetter = hoveredLink.rawLetter || {};
                 const rawPath = rawLetter.path || hoveredLink.path || '';
                 const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
-                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const idKey = rawPath || title;
+                const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
+                if (!popupObj) return; // 【修复】如果已有同ID弹窗弹出，则直接跳出
+                const { popup, body } = popupObj;
+                
                 const candidates = resolveLetterCandidates(rawPath || '');
                 if (!candidates.length) {
                     body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
@@ -1381,7 +1467,11 @@
                 const rawLetter = rObj.letter || rObj || {};
                 const rawPath = rawLetter.path || '';
                 const title = `信件：${hoveredRing.owner.id} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
-                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const idKey = rawPath || title;
+                const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
+                if (!popupObj) return;
+                const { popup, body } = popupObj;
+
                 const candidates = resolveLetterCandidates(rawPath || '');
                 if (!candidates.length) {
                     body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
@@ -1407,7 +1497,11 @@
                 const letter = hoveredBroadcast.letter;
                 const rawPath = letter.path || '';
                 const title = `${hoveredBroadcast.sender.id} → (广播) ${letter.number || ''}`.trim();
-                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
+                const idKey = rawPath || title;
+                const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
+                if (!popupObj) return;
+                const { popup, body } = popupObj;
+
                 const candidates = resolveLetterCandidates(rawPath || '');
                 if (!candidates.length) {
                     body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(letter) || '')}</pre>`;
@@ -1428,8 +1522,6 @@
                 })(0);
                 return;
             }
-
-
         });
 
         // ===== dblclick =====
@@ -1493,7 +1585,7 @@
                 type: "user",
                 isOC: !!user.isOC,
                 visible: false,
-                r: user.isOC ? 13 : 8,
+                r: user.isOC ? 16 : 8,
                 sentCount: 0,
                 recvCount: 0,
                 sentWords: 0,
@@ -1742,8 +1834,8 @@
     function initPulseRings(nodes) {
         return nodes.map((n, idx) => ({
             ownerId: n.id,
-            minRadius: n.isOC ? 13 : 10,
-            maxRadius: n.isOC ? 33 : 30,
+            minRadius: n.isOC ? 16 : 10,
+            maxRadius: n.isOC ? 38 : 30,
             currentRadius: n.isOC ? 13 : 10,
             growing: true,
             opacity: 0.12,
@@ -2075,10 +2167,9 @@
 
         // 1. 更新文本面板
         pTitle.textContent = `每日总览 (${dispY}/${dispM}/${dispD})`;
-        pLetters.innerHTML = `<span style="color:#00f7ff">${curDayData.recvL}</span> / <span style="color:#ff77aa">${curDayData.sentL}</span>`;
-        pAtts.innerHTML = `<span style="color:#00f7ff">${curDayData.recvA}</span> / <span style="color:#ff77aa">${curDayData.sentA}</span>`;
-        pWords.innerHTML = `<span style="color:#ffeeaa">${curDayData.sentWords}</span>`; // 【修复】仅显示发送字数
-
+        pLetters.innerHTML = `<span style="color:#00f7ff">${curDayData.recvL}</span> / <span style="color:#ff77aa">${curDayData.sentL}</span> 封`;
+        pAtts.innerHTML = `<span style="color:#ffaa00">${curDayData.recvA}</span> / <span style="color:#ff8855">${curDayData.sentA}</span> 件`;
+        pWords.innerHTML = `<span style="color:#ffeeaa">${curDayData.sentWords}</span> 字`;
         // Debug 输出
         console.log(`[Stats Window Debug] Date: ${dispY}-${dispM}-${dispD}, Window: ${windowDays} days`);
         console.log("Current Day Stats:", curDayData);
@@ -2094,16 +2185,29 @@
         const drawH = H - padY * 2;
         const stepX = drawW / (windowDays - 1);
 
-        // 提取指标数组用于求最大值
-        const arrL = windowData.map(d => d.recvL + d.sentL);
-        const arrA = windowData.map(d => d.recvA + d.sentA);
-        const maxL = Math.max(...arrL, 5); // 垫底最大值防除0
-        const maxA = Math.max(...arrA, 5);
+
+        // 获取配置参数并提取需要的线条数据
+        const cfg = window.__chartConfig || { lt:true, ws:true, at:true };
+        const linesToDraw = [];
+        let maxCount = 5, maxWord = 50; 
+
+        // -- 组装封数和件数阵列 --
+        if(cfg.lt) { const arr=windowData.map(d=>d.recvL+d.sentL); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#00f7ff'}); }
+        if(cfg.ls) { const arr=windowData.map(d=>d.sentL); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#ff77aa'}); }
+        if(cfg.lr) { const arr=windowData.map(d=>d.recvL); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#99ff99'}); }
+        if(cfg.at) { const arr=windowData.map(d=>d.recvA+d.sentA); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#ffaa00'}); }
+        if(cfg.as) { const arr=windowData.map(d=>d.sentA); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#ff8855'}); }
+        if(cfg.ar) { const arr=windowData.map(d=>d.recvA); maxCount=Math.max(maxCount,...arr); linesToDraw.push({arr, maxType:'count', color:'#dddd55'}); }
+        // -- 组装字数阵列 --
+        if(cfg.wt) { const arr=windowData.map(d=>d.recvWords+d.sentWords); maxWord=Math.max(maxWord,...arr); linesToDraw.push({arr, maxType:'word', color:'#ffcc55'}); }
+        if(cfg.ws) { const arr=windowData.map(d=>d.sentWords); maxWord=Math.max(maxWord,...arr); linesToDraw.push({arr, maxType:'word', color:'#ffeeaa'}); }
+        if(cfg.wr) { const arr=windowData.map(d=>d.recvWords); maxWord=Math.max(maxWord,...arr); linesToDraw.push({arr, maxType:'word', color:'#aaffaa'}); }
+ 
 
         function drawLine(arr, maxVal, color) {
             ctx.beginPath();
             ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 1.8;
             ctx.lineJoin = 'round';
             for (let i = 0; i < windowDays; i++) {
                 const x = padX + i * stepX;
@@ -2115,29 +2219,35 @@
             ctx.stroke();
         }
 
-        // 画信件总数 (青色)
-        drawLine(arrL, maxL, 'rgba(0, 247, 255, 0.8)');
-        // 画附件总数 (粉黄色)
-        drawLine(arrA, maxA, 'rgba(255, 170, 0, 0.8)');
+        linesToDraw.forEach(item => {
+            drawLine(item.arr, item.maxType === 'word' ? maxWord : maxCount, item.color);
+        });
     }
 
     /**
      * 【新增】渲染与更新渲染附件收纳窗口内部 HTML
+     * 支持参数：
+     *   attachmentsData - 附件数组
+     *   currentDate - 截止日期（只显示 <= currentDate 的）
+     *   isDesc - 排序方向（true = 日期降序）
+     *   filterType - 'all'|'收'|'发' （只显示对应类型）
      */
-    function renderAttachmentList(attachmentsData, currentDate, isDesc) {
-        attachmentsData = attachmentsData || [];
-        const body = document.getElementById('attachListBody');
-        const countSpan = document.getElementById('attachCountSpan');
-        if (!body) return;
-
-        // 1. 根据时间过滤
+    function renderAttachmentList(attachmentsData, currentDate, isDesc, filterType = 'all') {
+         attachmentsData = attachmentsData || [];
+         const body = document.getElementById('attachListBody');
+         const countSpan = document.getElementById('attachCountSpan');
+         if (!body) return;
+ 
+         // 1. 根据时间过滤
         const filtered = attachmentsData.filter(a => {
-            if(!a.date) return false;
-            return new Date(a.date) <= currentDate;
+            if (!a.date) return false;
+            if (new Date(a.date) > currentDate) return false;
+            if (filterType === 'all') return true;
+            return ((a.type || '').trim() === filterType);
         });
-
-        // 2. 排序
-        filtered.sort((a,b) => {
+ 
+         // 2. 排序
+        filtered.sort((a, b) => {
             const da = new Date(a.date).getTime();
             const db = new Date(b.date).getTime();
             return isDesc ? db - da : da - db; // true 降序（最新在上），false 升序
@@ -2543,15 +2653,16 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            if (n.isOC) {
-                ctx.save();
-                ctx.fillStyle = 'white';
-                ctx.font = `${Math.max(8, Math.floor(n.r * 0.7))}px zpix, sans-serif`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('OC', d.x, d.y);
-                ctx.restore();
-            }
+            // if (n.isOC) {
+            //     ctx.save();
+            //     ctx.fillStyle = 'white';
+            //     ctx.font = `${Math.max(8, Math.floor(n.r * 0.7))}px zpix, sans-serif`;
+            //     ctx.textAlign = 'center';
+            //     ctx.textBaseline = 'middle';
+            //     ctx.fillText('OC', d.x, d.y);
+            //     ctx.restore();
+            // }
+            // 取消显示oc字样
         });
         ctx.restore();
     }
@@ -2726,10 +2837,11 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 const curDayStr = dateState.current.toISOString().slice(0, 10);
                 const curWin = parseInt(windowInput.value) || 14;
                 
-                if (curDayStr !== lastChartUpdateDayStr || curWin !== lastChartUpdateWindow) {
+                if (curDayStr !== lastChartUpdateDayStr || curWin !== lastChartUpdateWindow || window.__forceChartRedraw) {
                     updateDailyStatsUI(dateState.current, curWin, dailyStatsMap);
                     lastChartUpdateDayStr = curDayStr;
                     lastChartUpdateWindow = curWin;
+                    window.__forceChartRedraw = false;
                 }
             } else {
                 if (panelEl && panelEl.style.display !== 'none') panelEl.style.display = 'none';
@@ -2743,7 +2855,8 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 
                 const curDayStr = dateState.current.toISOString().slice(0, 10);
                 if (curDayStr !== lastAttachUpdateDayStr || window.__attachSortChanged) {
-                    renderAttachmentList(window.__globalAttachmentsData, dateState.current, window.__attachSortDesc);
+                    // 【修复】加上了 window.__attachFilterType 保证筛选能生效
+                    renderAttachmentList(window.__globalAttachmentsData, dateState.current, window.__attachSortDesc, window.__attachFilterType || 'all');
                     lastAttachUpdateDayStr = curDayStr;
                     window.__attachSortChanged = false;
                 }
@@ -2774,15 +2887,7 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         if (!rawPath) return [];
         let p = rawPath.replace(/\\/g, '/').trim();
 
-        // Windows 绝对路径（如 D:/ZJU/... 或 D:\ZJU\...）
-        if (/^[A-Za-z]:\//.test(p)) {
-            const folder = p.replace(/\/+$/, '');
-            return [
-                `file:///${folder.replace(/#/g, '%23')}/content.txt`,
-            ];
-        }
-
-        // 项目内相对路径或以 /email/ 的路径 -> 转为相对 ./email/...
+        // 【修复】优先提取项目相对路径（避免使用会被浏览器 CORS 封杀的 file:///）
         const idx = p.indexOf('/email/');
         if (idx !== -1) {
             p = '.' + p.slice(idx);
@@ -2790,6 +2895,12 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             const m = p.match(/.*(email\/.*)$/i);
             if (m && m[1]) p = './' + m[1];
         }
+
+        // 如果连上面都没命中，才死马当活马医尝试保留绝对协议
+        if (/^[A-Za-z]:\//.test(p) && p.indexOf('./') !== 0) {
+            p = `file:///${p}`;
+        }
+
         p = p.replace(/\/+$/, '');
 
         // ✅ 关键：在拼接路径之前就对 # 进行编码
@@ -2823,6 +2934,7 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         display: flex;
         flex-direction: column;
         font-family: inherit;
+        transition: transform 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28); /* 新增弹性缓动 */
     }
     .email-popup .hdr {
         cursor: move;
@@ -2874,7 +2986,20 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             el.style.zIndex = ++_popupZ;
         }
 
-        window.__createEmailPopup = function (title, left, top) {
+        window.__activeEmailPopups = {}; // 【新增】全局活跃弹窗缓存池
+
+        window.__createEmailPopup = function (idKey, title, left, top) {
+            idKey = idKey || title || Math.random().toString();
+            
+            // 【核心防重逻辑】查字典，存在即唤醒、放大跳跳并返空
+            if (window.__activeEmailPopups[idKey]) {
+                const existing = window.__activeEmailPopups[idKey];
+                bringToFront(existing.popup);
+                existing.popup.style.transform = 'scale(1.03)';
+                setTimeout(() => existing.popup.style.transform = 'scale(1)', 150);
+                return null;
+            }
+
             const popup = document.createElement('div');
             popup.className = 'email-popup';
             popup.style.left = (left || (window.innerWidth / 2 - 210)) + 'px';
@@ -2892,6 +3017,9 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         `;
             document.body.appendChild(popup);
             bringToFront(popup);
+            
+            // 存入缓存
+            window.__activeEmailPopups[idKey] = { popup };
 
             const hdr = popup.querySelector('.hdr');
             const body = popup.querySelector('.body');
@@ -2920,78 +3048,21 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             }
 
             popup.addEventListener('mousedown', () => bringToFront(popup));
-            closeBtn.addEventListener('click', () => popup.remove());
+            closeBtn.addEventListener('click', () => {
+                popup.remove();
+                delete window.__activeEmailPopups[idKey]; // 关闭时擦除缓存
+            });
 
             return {
                 popup,
                 body,
                 setTitle: t => popup.querySelector('.title').textContent = t,
-                close: () => popup.remove()
+                close: () => {
+                    popup.remove();
+                    delete window.__activeEmailPopups[idKey];
+                }
             };
         };
-    }
-
-    /**
-     * 绑定点击事件处理（打开信件详情弹窗）
-     */
-    function setupClickHandlers(canvas, interactionHandlers) {
-        canvas.addEventListener('click', (evt) => {
-            const hoveredLink = interactionHandlers.getHoveredLink();
-            const hoveredRing = interactionHandlers.getHoveredRing();
-
-            if (hoveredLink) {
-                const rawLetter = hoveredLink.rawLetter || {};
-                const rawPath = rawLetter.path || hoveredLink.path || '';
-                const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
-                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
-                const candidates = resolveLetterCandidates(rawPath || '');
-                if (!candidates.length) {
-                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
-                    return;
-                }
-                body.textContent = '正在读取信件...';
-                (function tryOne(i) {
-                    if (i >= candidates.length) {
-                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
-                        return;
-                    }
-                    fetch(candidates[i]).then(r => {
-                        if (!r.ok) throw new Error('HTTP ' + r.status);
-                        return r.text();
-                    }).then(txt => {
-                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
-                    }).catch(() => tryOne(i + 1));
-                })(0);
-                return;
-            }
-
-            if (hoveredRing) {
-                const rObj = hoveredRing.rObj || {};
-                const rawLetter = rObj.letter || rObj || {};
-                const rawPath = rawLetter.path || '';
-                const title = `信件：${hoveredRing.owner.id} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
-                const { popup, body } = window.__createEmailPopup(title, evt.clientX + 8, evt.clientY + 8);
-                const candidates = resolveLetterCandidates(rawPath || '');
-                if (!candidates.length) {
-                    body.innerHTML = `<div>无可用路径</div><pre>${escapeHtml(JSON.stringify(rawLetter) || '')}</pre>`;
-                    return;
-                }
-                body.textContent = '正在读取信件...';
-                (function tryOne(i) {
-                    if (i >= candidates.length) {
-                        body.innerHTML = `<div>无法读取信件（尝试路径：${escapeHtml(candidates.join(', '))}）</div>`;
-                        return;
-                    }
-                    fetch(candidates[i]).then(r => {
-                        if (!r.ok) throw new Error('HTTP ' + r.status);
-                        return r.text();
-                    }).then(txt => {
-                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
-                    }).catch(() => tryOne(i + 1));
-                })(0);
-                return;
-            }
-        });
     }
 
     /**
@@ -3172,7 +3243,6 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
 
         // 9. 初始化弹窗与事件
         initEmailPopupSystem();
-        setupClickHandlers(canvas, interactionHandlers);
         setupCanvasEvents(canvas, nodes, view, width, height, tooltip);
 
         // 【新增备用存储】
@@ -3541,6 +3611,30 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         background: rgba(0, 50, 100, 0.5); border: 1px solid rgba(0,200,255,0.4); border-radius: 4px; color: #9ff; cursor: pointer; margin-left: 8px; font-family: 'zpix', sans-serif; font-size: 13px; padding: 3px 6px;
     }
     .attach-hdr button:hover { background: rgba(0, 100, 150, 0.8); }
+    
+   /* 筛选下拉：圆角 & 深色风格，与其他控件一致 */
+   #attachFilterSelect {
+       background: rgba(6, 22,  Thirty, 0.9); /* fallback，见下一行真实颜色 */
+       background: #0b2230; /* 深色底，保证对比更强 */
+       color: #bfefff;
+       border: 1.5px solid rgba(63,99,133,0.9);
+       padding: 5px 8px;
+       border-radius: 6px;
+       font-family: 'zpix', sans-serif;
+       font-size: 13px;
+       cursor: pointer;
+       outline: none;
+       box-shadow: none;
+   }
+   #attachFilterSelect:focus {
+       border-color: #00f7ff;
+       box-shadow: 0 0 8px rgba(0,247,255,0.12);
+   }
+   /* 使 header 内右侧控件水平对齐且间距合理 */
+   .attach-hdr > div { display: flex; align-items: center; gap: 8px; }
+    
+    
+    
     .attach-body {
         flex: 1;
         overflow-y: auto;
@@ -3648,18 +3742,39 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                         // 拦截 fetch
                         window.fetch = async function (resource, init) {
                             try {
-                                let url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+                                let url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
                                 let key = url.replace(/^file:\/+/, '').split('?')[0].split('#')[0];
+
+                                // 【核心修复】多层解码循环，撕开浏览器加上的 %2523..
+                                let decodeLimit = 3;
+                                while (key.includes('%') && decodeLimit > 0) {
+                                    let prev = key;
+                                    try { key = decodeURIComponent(key); } catch(e) { break; }
+                                    if (prev === key) break;
+                                    decodeLimit--;
+                                }
+
                                 key = normPath(key).toLowerCase();
                                 if (key.startsWith('./')) key = key.slice(2);
                                 if (key.startsWith('.')) key = key.slice(1);
                                 if (key.startsWith('/')) key = key.slice(1);
                                 if (!key.startsWith('email/') && key.indexOf('/email/') >= 0)
                                     key = key.slice(key.indexOf('/email/') + 1);
-                                if (localFilesMap && localFilesMap.has(key)) {
-                                    const file = localFilesMap.get(key);
-                                    const text = await file.text();
-                                    return new Response(text, { status: 200, headers: { 'Content-Type': guessContentType(key) } });
+                                
+                                if (localFilesMap) {
+                                    // 1. 常规精准匹配
+                                    if (localFilesMap.has(key)) {
+                                        const file = localFilesMap.get(key);
+                                        const text = await file.text();
+                                        return new Response(text, { status: 200, headers: { 'Content-Type': guessContentType(key) } });
+                                    }
+                                    // 2. 尾部模糊匹配 (对付如 #和中文夹杂所产生的匹配死角)
+                                    const fallbackKey = Array.from(localFilesMap.keys()).find(mk => key.endsWith(mk) || mk.endsWith(key) || key.includes(mk));
+                                    if (fallbackKey) {
+                                        const file = localFilesMap.get(fallbackKey);
+                                        const text = await file.text();
+                                        return new Response(text, { status: 200, headers: { 'Content-Type': guessContentType(fallbackKey) } });
+                                    }
                                 }
                             } catch (e) { console.debug('[local-fetch fallback]', e); }
                             return origFetch(resource, init);
@@ -3710,13 +3825,13 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 `正在检索从 ${formatDate(minD)} 到 ${formatDate(maxD)} 的通信记录`,
                 `正在联系 ${userCount} 位笔友`,
                 `正在邮递 ${letterCount} 封信`,
-                `正在整理 ${attachCount} 件收发附件`,  // 【新增】包含这行引导信息
+                `正在搬运 ${attachCount} 件包裹`,  // 【新增】包含这行引导信息
                 `Crackpost可视化即将启动，请稍候...`
             ];
 
             // ===== 新增：时间驱动进度条（均匀推进） =====
-            const charDelay = 55;       // 单字符打字延时 (ms) 可再调慢
-            const linePause = 700;     // 每行完成后的停顿 (ms)
+            const charDelay = 50;       // 单字符打字延时 (ms) 可再调慢
+            const linePause = 500;     // 每行完成后的停顿 (ms)
             const perLineCharCounts = lines.map(l => l.length);
             // 总时长 = Σ(字符数*charDelay) + 行间停顿(最后一行无停顿)
             const totalDuration =
@@ -3819,7 +3934,6 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             (function loop() { onTick(); requestAnimationFrame(loop); })();
 
             initEmailPopupSystem();
-            setupClickHandlers(canvas, interactionHandlers);
             setupCanvasEvents(canvas, nodes, view, width, height, tooltip);
 
             // 【后续备用】此时我们其实已经可以在外部或特定状态里把 attachmentsData 绑定给 UI 面板的渲染函数了
@@ -3861,7 +3975,10 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
 
         if (attachHdr && attachWin) {
             attachHdr.addEventListener('mousedown', (e) => {
-                if (e.target.tagName.toLowerCase() === 'button') return;
+                const tag = e.target.tagName.toLowerCase();
+                // 放行按钮和下拉框的点击，不要将其识别为拖拽窗口
+                if (tag === 'button' || tag === 'select' || tag === 'option') return;
+                
                 attachIsDragging = true;
                 const rect = attachWin.getBoundingClientRect();
                 attachDragDX = e.clientX - rect.left;
@@ -3892,151 +4009,50 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         if (attachSortBtn) {
             attachSortBtn.addEventListener('click', () => {
                 window.__attachSortDesc = !window.__attachSortDesc;
-                attachSortBtn.textContent = window.__attachSortDesc ? '🔽 倒序' : '🔼 正序';
+                attachSortBtn.textContent = window.__attachSortDesc ? '倒序' : '正序';
                 window.__attachSortChanged = true;
             });
         }
-    });
-</script>
-
-
-
-<script>
-    /* 在文件末尾现有 <script> 中追加以下内容 */
-
-    (function () {
-        const origFetch = window.fetch.bind(window);
-        let localFilesMap = null;
-
-        function normPath(p) {
-            return String(p || '')
-                .replace(/\\/g, '/')
-                .replace(/^\.\/+/, '')
-                .replace(/^\/+/, '')
-                .replace(/\/+/g, '/');
-        }
-
-        function guessContentType(p) {
-            p = p.toLowerCase();
-            if (p.endsWith('.tsv')) return 'text/tab-separated-values; charset=utf-8';
-            if (p.endsWith('.txt')) return 'text/plain; charset=utf-8';
-            return 'text/plain; charset=utf-8';
-        }
-
-        // 选择目录，构建文件映射，并拦截 fetch
-        async function enableLocalEmailDirMode() {
-            return new Promise((resolve) => {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.webkitdirectory = true;
-                input.multiple = true;
-                input.style.display = 'none';
-                document.body.appendChild(input);
-
-                input.addEventListener('change', async (e) => {
-                    try {
-                        const files = Array.from(e.target.files || []);
-                        if (!files.length) {
-                            alert('未选择任何文件');
-                            resolve(false);
-                            return;
-                        }
-                        // 建立映射（大小写不敏感；为方便匹配，同时映射 email/ 前缀和无前缀两种）
-                        const map = new Map();
-                        files.forEach(f => {
-                            const rel = f.webkitRelativePath || f.name;
-                            const key = normPath(rel).toLowerCase();           // 如: email/收/20250101_.../content.txt 或 global_result.tsv
-                            map.set(key, f);
-                            if (!key.startsWith('email/')) {
-                                map.set(('email/' + key).toLowerCase(), f);   // 兼容请求以 email/ 开头
-                            } else {
-                                map.set(key.replace(/^email\//, ''), f);      // 兼容请求不带 email/ 前缀
-                            }
-                        });
-
-                        // 校验是否含 global_result.tsv
-                        if (!map.has('email/global_result.tsv') && !map.has('global_result.tsv')) {
-                            alert('请选择包含 email/global_result.tsv 的目录（请直接选中“email”文件夹）');
-                            resolve(false);
-                            return;
-                        }
-
-                        localFilesMap = map;
-
-                        // 拦截 fetch：命中本地映射时直接返回 Response，否则走原始 fetch
-                        window.fetch = async function (resource, init) {
-                            try {
-                                let url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
-                                // 仅拦截 email 路径相关
-                                let key = url;
-                                // 去掉 file:// 前缀与查询串、hash
-                                key = key.replace(/^file:\/+/, '');
-                                key = key.split('?')[0].split('#')[0];
-                                // 相对路径规范化
-                                key = normPath(key).toLowerCase();
-                                // 常见相对形式归一
-                                if (key.startsWith('./')) key = key.slice(2);
-                                if (key.startsWith('.')) key = key.slice(1);
-                                if (key.startsWith('/')) key = key.slice(1);
-
-                                // 特别照顾 ./email/... / email/... 两种
-                                if (!key.startsWith('email/')) {
-                                    if (key.indexOf('/email/') >= 0) {
-                                        key = key.slice(key.indexOf('/email/') + 1); // 去前缀变为 email/...
-                                    }
-                                }
-
-                                if (localFilesMap && localFilesMap.has(key)) {
-                                    const file = localFilesMap.get(key);
-                                    const text = await file.text();
-                                    return new Response(text, {
-                                        status: 200,
-                                        headers: { 'Content-Type': guessContentType(key) }
-                                    });
-                                }
-                            } catch (err) {
-                                console.debug('[local-fetch] 拦截异常，回退原始 fetch', err);
-                            }
-                            return origFetch(resource, init);
-                        };
-
-                        // 清空已有画布，避免重复叠加
-                        const viz = document.getElementById('visualization');
-                        if (viz) while (viz.firstChild) viz.removeChild(viz.firstChild);
-                        const tooltip = document.querySelector('.tooltip');
-                        if (tooltip) { tooltip.style.display = 'none'; }
-
-                        // 复用原有流程
-                        initVisualization();
-                        resolve(true);
-                    } catch (err) {
-                        console.error('[local] 启用本地目录模式失败', err);
-                        alert('启用本地目录模式失败，请查看控制台');
-                        resolve(false);
-                    } finally {
-                        input.remove();
-                    }
-                });
-
-                input.click();
+        
+        const attachFilterSelect = document.getElementById('attachFilterSelect');
+        if (attachFilterSelect) {
+            window.__attachFilterType = attachFilterSelect.value || 'all';
+            attachFilterSelect.addEventListener('change', () => {
+                window.__attachFilterType = attachFilterSelect.value || 'all';
+                window.__attachSortChanged = true;
             });
         }
 
-        // 测试按钮（先不管位置，固定在右上角）
-        const btn = document.createElement('button');
-        btn.id = 'pickLocalEmailDirBtn';
-        btn.textContent = '加载本地 email 目录（测试）';
-        btn.style.position = 'fixed';
-        btn.style.right = '12px';
-        btn.style.top = '12px';
-        btn.style.zIndex = '3000';
-        btn.style.padding = '6px 10px';
-        btn.style.background = 'rgba(0, 120, 180, 0.5)';
-        btn.style.color = '#dff';
-        btn.style.border = '1px solid rgba(0,200,255,0.5)';
-        btn.style.borderRadius = '6px';
-        btn.onclick = () => enableLocalEmailDirMode();
-    })();
+       // ============ 新增：折线图参数配置的交互逻辑 ============
+       const openCfBtn = document.getElementById('openChartConfigBtn');
+       const cfPopup = document.getElementById('chartConfigPopup');
+       const closeCfBtn = document.getElementById('closeChartConfigBtn');
+       
+       if(openCfBtn && cfPopup) {
+           openCfBtn.onclick = () => { cfPopup.style.display = 'block'; };
+           closeCfBtn.onclick = () => { cfPopup.style.display = 'none'; };
+           // 点击弹窗外部关闭
+           document.addEventListener('mousedown', function (e) {
+               if (cfPopup.style.display === 'block' && !cfPopup.contains(e.target) && e.target !== openCfBtn) {
+                   cfPopup.style.display = 'none';
+               }
+           });
+           
+           // 绑定数据状态同步
+           window.__chartConfig = { lt:true, ls:false, lr:false, at:true, as:false, ar:false, ws:true, wr:false, wt:false };
+           const keys = ['lt', 'ls', 'lr', 'at', 'as', 'ar', 'ws', 'wr', 'wt'];
+           keys.forEach(k => {
+               const cb = document.getElementById('cc_' + k);
+               if (cb) {
+                   cb.addEventListener('change', (e) => {
+                       window.__chartConfig[k] = e.target.checked;
+                       window.__forceChartRedraw = true; // 强制视图下一帧重绘
+                   });
+               }
+           });
+       }
+    });
 </script>
+
 
 </html>

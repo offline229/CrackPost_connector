@@ -2,5 +2,9 @@
 log/
 build/
 email_Cyclop/
+email_yamuko/
 email/
 *.ini
+*.txt
+*.exe
+*.rar
