@@ -4,8 +4,10 @@ build/
 email_Cyclop/
 email_yamuko/
 email/
+dist/
 *.ini
 *.txt
 *.exe
 *.rar
 *.zip
+*.pyc

@@ -97,53 +97,77 @@
 
         .controls {
             position: absolute;
-            bottom: 30px;
+            bottom: 18px;
             left: 50%;
             transform: translateX(-50%);
-            width: 80%;
-            max-width: 800px;
-            background: rgba(0, 20, 40, 0.5);
-            backdrop-filter: blur(10px);
-            border-radius: 10px;
-            padding: 15px;
+            width: 70%;
+            max-width: 720px;
+            background: rgba(0, 20, 40, 0.35);
+            backdrop-filter: blur(6px);
+            border-radius: 999px;
+            padding: 6px 14px;
             display: flex;
             flex-direction: column;
             align-items: center;
             z-index: 100;
+            border: 1px solid rgba(0, 200, 255, 0.18);
+            transition: padding 0.08s ease, border-radius 0.08s ease, background 0.08s ease, box-shadow 0.08s ease;
+            box-shadow: 0 0 18px rgba(0, 120, 180, 0.15);
+        }
+        /* 不用 :focus-within，避免拖完滑条后焦点卡住难以收纳 */
+        .controls:hover,
+        .controls.is-expanded {
+            padding: 12px 16px 14px;
+            border-radius: 12px;
+            background: rgba(0, 20, 40, 0.55);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 24px rgba(0, 160, 220, 0.28);
         }
 
         /* 剩余控件样式复用（和原文件一样） */
         .time-slider {
             width: 100%;
-            margin: 10px 0;
+            margin: 0;
         }
 
         .slider-container {
             width: 100%;
             display: flex;
             align-items: center;
-            margin-top: 5px;
+            margin-top: 0;
         }
 
         .time-slider {
             -webkit-appearance: none;
             appearance: none;
-            width: 90%;
-            height: 6px;
-            background: rgba(0, 120, 180, 0.3);
+            width: 100%;
+            height: 5px;
+            background: rgba(0, 120, 180, 0.35);
             border-radius: 3px;
             outline: none;
+            transition: height 0.08s ease;
+        }
+        .controls:hover .time-slider,
+        .controls.is-expanded .time-slider {
+            width: 90%;
+            height: 6px;
         }
 
         .time-slider::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
-            width: 18px;
-            height: 18px;
+            width: 14px;
+            height: 14px;
             background: rgb(0, 200, 255);
             border-radius: 50%;
             cursor: pointer;
             box-shadow: 0 0 10px rgba(0, 200, 255, 0.8);
+            transition: width 0.08s, height 0.08s;
+        }
+        .controls:hover .time-slider::-webkit-slider-thumb,
+        .controls.is-expanded .time-slider::-webkit-slider-thumb {
+            width: 18px;
+            height: 18px;
         }
 
         .time-display {
@@ -152,12 +176,35 @@
             margin-left: 15px;
             min-width: 100px;
             text-align: left;
+            max-width: 0;
+            opacity: 0;
+            overflow: hidden;
+            pointer-events: none;
+            transition: max-width 0.08s ease, opacity 0.06s ease, margin 0.06s ease;
+        }
+        .controls:hover .time-display,
+        .controls.is-expanded .time-display {
+            max-width: 160px;
+            opacity: 1;
+            pointer-events: auto;
         }
 
         .button-container {
             display: flex;
             justify-content: center;
+            margin-top: 0;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            pointer-events: none;
+            transition: max-height 0.08s ease, opacity 0.06s ease, margin 0.06s ease;
+        }
+        .controls:hover .button-container,
+        .controls.is-expanded .button-container {
+            max-height: 60px;
+            opacity: 1;
             margin-top: 10px;
+            pointer-events: auto;
         }
 
         .control-button {
@@ -185,7 +232,19 @@
         .speed-control {
             display: flex;
             align-items: center;
+            margin-top: 0;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            pointer-events: none;
+            transition: max-height 0.08s ease, opacity 0.06s ease, margin 0.06s ease;
+        }
+        .controls:hover .speed-control,
+        .controls.is-expanded .speed-control {
+            max-height: 40px;
+            opacity: 1;
             margin-top: 5px;
+            pointer-events: auto;
         }
 
         .speed-label {
@@ -232,8 +291,12 @@
 
         <!-- 【新增】每日数据框控制开关 -->
         <label class="flag-menu-item">
-            <input type="checkbox" id="toggleDailyStats">
+            <input type="checkbox" id="toggleDailyStats" checked>
             <span>显示每日数据统计</span>
+        </label>
+        <label class="flag-menu-item">
+            <input type="checkbox" id="toggleAnonymize">
+            <span>匿名化显示</span>
         </label>
         <div class="flag-menu-subitem">
             <span>折线图时间范围(天)</span>
@@ -244,9 +307,6 @@
            <span>折线参数</span>
            <button id="openChartConfigBtn" class="pixel-input" style="width: auto; cursor:pointer;">设置折线参数...</button>
        </div>
-        <!-- 【新增】附件收纳窗控制开关 -->
-        <label class="flag-menu-item">
-        <!-- 可以在这里添加更多flag -->
         <button id="flagMenuCloseBtn" class="flag-menu-close">关闭</button>
     </div>
    
@@ -278,7 +338,7 @@
             <div>
                 <!-- 筛选：全部 / 收 / 发 -->
                 <select id="attachFilterSelect" title="筛选收/发">
-                    <option value="all">全部</option>
+                    <option value="all">收发</option>
                     <option value="收">收</option>
                     <option value="发">发</option>
                 </select>
@@ -289,6 +349,34 @@
         </div>
         <div class="attach-body" id="attachListBody"></div>
         <div class="attach-foot">共显示 <span id="attachCountSpan">0</span> 件附件</div>
+    </div>
+
+    <!-- 节点人物附件柜：xx寄来之物 -->
+    <div id="personAttachWindow" class="attachment-window person-attach-window">
+        <div class="attach-hdr" id="personAttachHdr">
+            <span id="personAttachTitle">寄来之物</span>
+            <div>
+                <select id="personAttachFilterSelect" title="筛选收/发">
+                    <option value="all">收发</option>
+                    <option value="收">收</option>
+                    <option value="发">发</option>
+                </select>
+                <button id="personAttachSortBtn" title="按日期排序(点击切换升/降)">倒序</button>
+                <button id="personAttachCloseBtn" title="关闭">✕</button>
+            </div>
+        </div>
+        <div class="attach-body" id="personAttachListBody"></div>
+        <div class="attach-foot">共显示 <span id="personAttachCountSpan">0</span> 件附件</div>
+    </div>
+
+    <!-- 附件图片灯箱 -->
+    <div id="attachLightbox" class="attach-lightbox" hidden>
+        <div class="attach-lightbox-backdrop"></div>
+        <div class="attach-lightbox-panel">
+            <button type="button" class="attach-lightbox-close" title="关闭">✕</button>
+            <img id="attachLightboxImg" alt="附件预览" />
+            <div id="attachLightboxCaption" class="attach-lightbox-caption"></div>
+        </div>
     </div>
     
     <!-- 【新增】右上角数据面板 -->
@@ -534,6 +622,7 @@
                 const receiver = splitAndResolve((cols[3] || '').trim());
 
                 // cols[4] 信件类型, cols[5] 下载位置, cols[6] 文字数, cols[7] 文件数...
+                const letterPath = cols[5] ? cols[5].trim() : '';
                 const textAttsRaw = cols[8] ? cols[8].trim() : '';
                 const fileAttsRaw = cols[9] ? cols[9].trim() : ''; // 【修复】在此处补充 fileAttsRaw 的定义
 
@@ -548,7 +637,8 @@
                             sender: sender,
                             receiver: receiver,
                             isFile: false,
-                            content: txt.trim()
+                            content: txt.trim(),
+                            letterPath
                         });
                     }
                 }
@@ -563,7 +653,8 @@
                             sender: sender,
                             receiver: receiver,
                             isFile: true,
-                            content: fp
+                            content: fp,
+                            letterPath
                         });
                     }
                 }
@@ -1243,7 +1334,7 @@
                     const sent = node.sentCount || 0;
                     const sWords = node.sentWords || 0;
 
-                    let html = `<b>发信人：</b>${node.displayName || node.id}` +
+                    let html = `<b>发信人：</b>${displayPersonName(node.displayName || node.id)}` +
                         `<br><b>发出：</b>${sent} 封` +
                         `<br><b>发字数：</b>${sWords} 字`;
 
@@ -1273,8 +1364,8 @@
                     hoveredLink = link;
                     hoveredRing = null;
                     const letter = link.rawLetter || {};
-                    const sender = link.source.id;
-                    const receivers = link.target.id;
+                    const sender = displayPersonName(link.source.id);
+                    const receivers = displayPersonName(link.target.id);
                     const number = link.number || (letter.number || '');
                     const date = link.date || (letter.date || '');
                     const type = link.type || (letter.type || '');
@@ -1295,8 +1386,10 @@
                         hoveredNode = null;
                         hoveredRing = ringHit;
                         const rObj = ringHit.rObj;
-                        const sender = ringHit.owner.id;
-                        const receivers = (rObj.letter && rObj.letter.receivers) ? rObj.letter.receivers.join(',') : '';
+                        const sender = displayPersonName(ringHit.owner.id);
+                        const receivers = (rObj.letter && rObj.letter.receivers)
+                            ? rObj.letter.receivers.map(displayPersonName).join(',')
+                            : '';
                         const number = (rObj.letter && rObj.letter.number) || '';
                         const date = (rObj.letter && rObj.letter.date) || rObj.dateObj.toISOString().slice(0, 10);
                         const type = 'A';
@@ -1314,8 +1407,8 @@
                     if (bcastHit) {
                         hoveredBroadcast = bcastHit; // ← 新增状态变量
                         const letter = bcastHit.letter;
-                        const sender = bcastHit.sender.id;
-                        const receivers = (letter.receivers || []).join(',');
+                        const sender = displayPersonName(bcastHit.sender.id);
+                        const receivers = (letter.receivers || []).map(displayPersonName).join(',');
                         const number = letter.number || '';
                         const date = letter.date || '';
                         const type = 'B';
@@ -1435,8 +1528,8 @@
             if (hoveredLink) {
                 const rawLetter = hoveredLink.rawLetter || {};
                 const rawPath = rawLetter.path || hoveredLink.path || '';
-                const title = `${hoveredLink.source.id} → ${hoveredLink.target.id} ${hoveredLink.number || ''}`.trim();
-                const idKey = rawPath || title;
+                const title = `${displayPersonNamePlain(hoveredLink.source.id)} → ${displayPersonNamePlain(hoveredLink.target.id)} ${hoveredLink.number || ''}`.trim();
+                const idKey = rawPath || `${hoveredLink.source.id}|${hoveredLink.target.id}|${hoveredLink.number || ''}`;
                 const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
                 if (!popupObj) return; // 【修复】如果已有同ID弹窗弹出，则直接跳出
                 const { popup, body } = popupObj;
@@ -1456,7 +1549,7 @@
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
                     }).then(txt => {
-                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                        fillEmailPopupWithAttachments(body, txt, rawPath);
                     }).catch(() => tryOne(i + 1));
                 })(0);
                 return;
@@ -1466,8 +1559,8 @@
                 const rObj = hoveredRing.rObj || {};
                 const rawLetter = rObj.letter || rObj || {};
                 const rawPath = rawLetter.path || '';
-                const title = `信件：${hoveredRing.owner.id} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
-                const idKey = rawPath || title;
+                const title = `信件：${displayPersonNamePlain(hoveredRing.owner.id)} ${(rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : (rObj.date || ''))}`;
+                const idKey = rawPath || `ring|${hoveredRing.owner.id}|${rObj.dateObj ? rObj.dateObj.toISOString().slice(0, 10) : ''}`;
                 const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
                 if (!popupObj) return;
                 const { popup, body } = popupObj;
@@ -1487,7 +1580,7 @@
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
                     }).then(txt => {
-                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                        fillEmailPopupWithAttachments(body, txt, rawPath);
                     }).catch(() => tryOne(i + 1));
                 })(0);
                 return;
@@ -1496,8 +1589,8 @@
             if (hoveredBroadcast) {
                 const letter = hoveredBroadcast.letter;
                 const rawPath = letter.path || '';
-                const title = `${hoveredBroadcast.sender.id} → (广播) ${letter.number || ''}`.trim();
-                const idKey = rawPath || title;
+                const title = `${displayPersonNamePlain(hoveredBroadcast.sender.id)} → (广播) ${letter.number || ''}`.trim();
+                const idKey = rawPath || `bcast|${hoveredBroadcast.sender.id}|${letter.number || ''}`;
                 const popupObj = window.__createEmailPopup(idKey, title, evt.clientX + 8, evt.clientY + 8);
                 if (!popupObj) return;
                 const { popup, body } = popupObj;
@@ -1517,7 +1610,7 @@
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
                     }).then(txt => {
-                        body.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>`;
+                        fillEmailPopupWithAttachments(body, txt, rawPath);
                     }).catch(() => tryOne(i + 1));
                 })(0);
                 return;
@@ -1535,7 +1628,8 @@
             getHoveredLink: () => hoveredLink,
             getHoveredRing: () => hoveredRing,
             getHoveredBroadcast: () => hoveredBroadcast,
-            getSelectedNode: () => selectedNode // ← 新增
+            getSelectedNode: () => selectedNode,
+            clearSelectedNode: () => { selectedNode = null; }
         };
     }
 
@@ -1998,7 +2092,7 @@
                 const sent = hoveredNode.sentCount || 0;
                 const sWords = hoveredNode.sentWords || 0;
 
-                let html = `<b>发信人：</b>${hoveredNode.displayName || hoveredNode.id}` +
+                let html = `<b>发信人：</b>${displayPersonName(hoveredNode.displayName || hoveredNode.id)}` +
                     `<br><b>发出：</b>${sent} 封` +
                     `<br><b>发字数：</b>${sWords} 字`;
 
@@ -2073,9 +2167,7 @@
                     filterByDate(dateState.current);
                     updateTimeDisplay(dateState.current);
                     onTick();
-                    clearInterval(playInterval);
-                    playInterval = null;
-                    if (playButton) playButton.textContent = "▶ Play";
+                    stopPlay();
                     return;
                 }
                 dateState.current = next;
@@ -2224,57 +2316,248 @@
         });
     }
 
+    /** 判断路径是否为常见图片 */
+    function isImageAttachmentPath(p) {
+        return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(p || '').split('?')[0]);
+    }
+
+    /** 取文件名（去掉目录） */
+    function attachmentBaseName(p) {
+        const s = String(p || '').replace(/\\/g, '/');
+        const i = s.lastIndexOf('/');
+        return i >= 0 ? s.slice(i + 1) : s;
+    }
+
     /**
-     * 【新增】渲染与更新渲染附件收纳窗口内部 HTML
-     * 支持参数：
-     *   attachmentsData - 附件数组
-     *   currentDate - 截止日期（只显示 <= currentDate 的）
-     *   isDesc - 排序方向（true = 日期降序）
-     *   filterType - 'all'|'收'|'发' （只显示对应类型）
+     * 将附件路径解析为可展示的 URL。
+     * 本地选目录模式下走 blob:；HTTP 直开则回退相对路径。
      */
-    function renderAttachmentList(attachmentsData, currentDate, isDesc, filterType = 'all') {
+    function resolveAttachmentSrc(rawPath) {
+        if (!rawPath) return '';
+        let p = String(rawPath).replace(/\\/g, '/').trim();
+        if (!p) return '';
+        if (typeof window.__resolveLocalBlobUrl === 'function') {
+            const blob = window.__resolveLocalBlobUrl(p);
+            if (blob) return blob;
+        }
+        if (!/^https?:\/\//i.test(p) && !p.startsWith('blob:') && !p.startsWith('data:')) {
+            if (!p.startsWith('./') && !p.startsWith('/')) p = './' + p;
+        }
+        return p;
+    }
+
+    /** 规范化信件/附件目录路径，便于匹配 */
+    function normAttachFolder(p) {
+        return String(p || '')
+            .replace(/\\/g, '/')
+            .replace(/^\.\//, '')
+            .replace(/^\/+/, '')
+            .replace(/\/+$/, '')
+            .toLowerCase();
+    }
+
+    /** 查找某封信目录下的图片附件 */
+    function findLetterImageAttachments(letterPath) {
+        const folder = normAttachFolder(letterPath);
+        if (!folder) return [];
+        const folderBase = folder.split('/').filter(Boolean).pop() || '';
+        return (window.__globalAttachmentsData || []).filter(a => {
+            if (!a.isFile || !isImageAttachmentPath(a.content)) return false;
+            const lp = normAttachFolder(a.letterPath || '');
+            if (lp && (lp === folder || folder.endsWith(lp) || lp.endsWith(folder))) return true;
+            const cp = normAttachFolder(a.content);
+            if (folder && (cp.startsWith(folder + '/') || cp.includes('/' + folder + '/'))) return true;
+            if (folderBase && cp.includes('/' + folderBase.toLowerCase() + '/')) return true;
+            return false;
+        });
+    }
+
+    /** 把正文 + 同封图片写入信件弹窗 */
+    function fillEmailPopupWithAttachments(bodyEl, txt, letterPath) {
+        if (!bodyEl) return;
+        const images = findLetterImageAttachments(letterPath);
+        let gallery = '';
+        if (images.length) {
+            gallery = `<div class="letter-attach-gallery">` + images.map(img => {
+                const src = resolveAttachmentSrc(img.content);
+                const name = attachmentBaseName(img.content);
+                return `<div>
+                    <img src="${escapeHtml(src)}" alt="${escapeHtml(name)}" loading="lazy"
+                         data-attach-preview="${escapeHtml(src)}" data-attach-caption="${escapeHtml(name)}"
+                         onerror="this.style.display='none'" />
+                    <div class="letter-attach-cap">${escapeHtml(name)}</div>
+                </div>`;
+            }).join('') + `</div>`;
+        }
+        bodyEl.innerHTML = `<pre style="white-space:pre-wrap; color:#dff; margin:0">${escapeHtml(txt)}</pre>${gallery}`;
+    }
+
+    /** 附件条目稳定 key（用于增量更新，避免整表闪烁） */
+    function getAttachmentItemKey(item) {
+        const raw = [
+            item.date || '',
+            item.type || '',
+            item.sender || '',
+            item.receiver || '',
+            item.isFile ? '1' : '0',
+            item.content || ''
+        ].join('\u0001');
+        // 短 hash，避免长正文/换行写进 data 属性
+        let h = 5381;
+        for (let i = 0; i < raw.length; i++) h = ((h << 5) + h) ^ raw.charCodeAt(i);
+        return (h >>> 0).toString(36) + '_' + raw.length;
+    }
+
+    /** 生成单条附件卡片 HTML；animate=true 时才播放入场动画 */
+    function buildAttachmentItemHtml(item, opts, animate) {
+        const isRecv = (item.type || '').trim() === '收';
+        const typeColor = isRecv ? '#00f7ff' : '#ff77aa';
+        const key = getAttachmentItemKey(item);
+        const animCls = animate ? ' is-just-added' : ' is-settled';
+        const peopleRow = opts.hidePeople ? '' : `
+                <div class="attach-item-row attach-people">
+                    ${displayPersonName(item.sender)} ➔ ${displayPersonList(item.receiver)}
+                </div>`;
+
+        if (!item.isFile) {
+            return `<div class="attach-item attach-item-text${animCls}" data-attach-key="${key}">
+                <div class="attach-item-row">
+                    <span class="attach-date">${escapeHtml(item.date)}</span>
+                    <span style="color:${typeColor}; font-weight:bold;">${escapeHtml(item.type)}</span>
+                </div>
+                ${peopleRow}
+                <div class="attach-item-content attach-quote">${escapeHtml(item.content)}</div>
+            </div>`;
+        }
+
+        const fileName = attachmentBaseName(item.content);
+        const src = resolveAttachmentSrc(item.content);
+        const captionPlain = `${item.date} · ${displayPersonNamePlain(item.sender)} ➔ ${displayPersonListPlain(item.receiver)} · ${fileName}`;
+
+        if (isImageAttachmentPath(item.content)) {
+            return `<div class="attach-item attach-item-image${animCls}" data-attach-key="${key}">
+                <div class="attach-item-row">
+                    <span class="attach-date">${escapeHtml(item.date)}</span>
+                    <span style="color:${typeColor}; font-weight:bold;">${escapeHtml(item.type)}</span>
+                </div>
+                ${peopleRow}
+                <button type="button" class="attach-thumb-btn" data-attach-preview="${escapeHtml(src)}" data-attach-caption="${escapeHtml(captionPlain)}" title="点击放大">
+                    <img class="attach-thumb" src="${escapeHtml(src)}" alt="${escapeHtml(fileName)}" loading="lazy"
+                         onerror="this.classList.add('broken'); this.alt='无法加载图片';" />
+                    <span class="attach-thumb-name">${escapeHtml(fileName)}</span>
+                </button>
+            </div>`;
+        }
+
+        return `<div class="attach-item attach-item-file${animCls}" data-attach-key="${key}">
+            <div class="attach-item-row">
+                <span class="attach-date">${escapeHtml(item.date)}</span>
+                <span style="color:${typeColor}; font-weight:bold;">${escapeHtml(item.type)}</span>
+            </div>
+            ${peopleRow}
+            <a class="attach-file-card" href="${escapeHtml(src)}" target="_blank" rel="noopener" download="${escapeHtml(fileName)}" title="打开 / 下载">
+                <span class="attach-file-icon" aria-hidden="true"></span>
+                <span class="attach-file-meta">
+                    <span class="attach-file-name">${escapeHtml(fileName)}</span>
+                    <span class="attach-file-path">${escapeHtml(item.content)}</span>
+                </span>
+            </a>
+        </div>`;
+    }
+
+    /**
+     * 渲染附件列表（日期前进时增量插入，避免整柜闪烁）
+     * opts: { bodyId, countId, personName, hidePeople }
+     */
+    function renderAttachmentList(attachmentsData, currentDate, isDesc, filterType = 'all', opts = {}) {
          attachmentsData = attachmentsData || [];
-         const body = document.getElementById('attachListBody');
-         const countSpan = document.getElementById('attachCountSpan');
+         const bodyId = opts.bodyId || 'attachListBody';
+         const countId = opts.countId || 'attachCountSpan';
+         const body = document.getElementById(bodyId);
+         const countSpan = document.getElementById(countId);
          if (!body) return;
- 
-         // 1. 根据时间过滤
+
+         const personName = (opts.personName || '').trim();
+         const modeKey = [filterType, isDesc ? '1' : '0', personName, isAnonymizeOn() ? '1' : '0'].join('|');
+
+         // 1. 根据时间 + 收发 + 人物过滤
         const filtered = attachmentsData.filter(a => {
             if (!a.date) return false;
             if (new Date(a.date) > currentDate) return false;
-            if (filterType === 'all') return true;
-            return ((a.type || '').trim() === filterType);
+            if (filterType !== 'all' && ((a.type || '').trim() !== filterType)) return false;
+            if (personName) {
+                const sender = (a.sender || '').trim();
+                const receivers = String(a.receiver || '').split(',').map(s => s.trim()).filter(Boolean);
+                if (sender !== personName && !receivers.includes(personName)) return false;
+            }
+            return true;
         });
- 
+
          // 2. 排序
         filtered.sort((a, b) => {
             const da = new Date(a.date).getTime();
             const db = new Date(b.date).getTime();
-            return isDesc ? db - da : da - db; // true 降序（最新在上），false 升序
+            return isDesc ? db - da : da - db;
         });
 
-        // 3. 构建视图
-        let html = '';
-        filtered.forEach(item => {
-            const isRecv = (item.type || '').trim() === '收';
-            const typeColor = isRecv ? '#00f7ff' : '#ff77aa';
-            
-            html += `
-            <div class="attach-item">
-                <div class="attach-item-row">
-                    <span style="color:#b7c7d6">${item.date}</span>
-                    <span style="color:${typeColor}; font-weight:bold;">${escapeHtml(item.type)}</span>
-                </div>
-                <div class="attach-item-row" style="color:#ffeeaa;">
-                    ${escapeHtml(item.sender)} ➔ ${escapeHtml(item.receiver)}
-                </div>
-                <div class="attach-item-content">
-                    ${escapeHtml(item.content)}
-                </div>
-            </div>`;
-        });
-        body.innerHTML = html;
-        if(countSpan) countSpan.textContent = filtered.length;
+        const newKeys = filtered.map(getAttachmentItemKey);
+        const newKeySet = new Set(newKeys);
+        const prevMode = body.dataset.attachMode || '';
+        const existing = Array.from(body.querySelectorAll('.attach-item[data-attach-key]'));
+        const existingKeys = existing.map(el => el.getAttribute('data-attach-key'));
+        const existingKeySet = new Set(existingKeys);
+        const modeSame = prevMode === modeKey;
+
+        // 是否可以纯增量：筛选/排序未变，且旧 key 都还在新列表里（日期前进或不变）
+        const canIncremental = modeSame
+            && existing.length > 0
+            && existingKeys.every(k => newKeySet.has(k));
+
+        if (canIncremental) {
+            const added = filtered.filter(item => !existingKeySet.has(getAttachmentItemKey(item)));
+            if (added.length) {
+                // 按当前排序位置插入新卡片，仅新卡片带动画
+                const keyToEl = new Map(existing.map(el => [el.getAttribute('data-attach-key'), el]));
+                let refChild = body.firstChild;
+                for (let i = 0; i < filtered.length; i++) {
+                    const item = filtered[i];
+                    const key = getAttachmentItemKey(item);
+                    let el = keyToEl.get(key);
+                    if (!el) {
+                        const wrap = document.createElement('div');
+                        wrap.innerHTML = buildAttachmentItemHtml(item, opts, true).trim();
+                        el = wrap.firstElementChild;
+                        body.insertBefore(el, refChild || null);
+                        keyToEl.set(key, el);
+                        // 动画结束后落为 settled，避免再次触发
+                        el.addEventListener('animationend', () => {
+                            el.classList.remove('is-just-added');
+                            el.classList.add('is-settled');
+                        }, { once: true });
+                    }
+                    // 把已有节点排到正确顺序（不重建、不闪）
+                    if (refChild !== el) {
+                        body.insertBefore(el, refChild || null);
+                    }
+                    refChild = el.nextSibling;
+                }
+            }
+            // 去掉已过期的「今日送达」类（若仍残留）
+            existing.forEach(el => {
+                el.classList.remove('is-new');
+                el.querySelectorAll('.attach-badge-new').forEach(b => b.remove());
+            });
+        } else {
+            // 筛选/排序变化，或日期回退：静默整表重建（无入场闪烁）
+            let html = '';
+            filtered.forEach(item => {
+                html += buildAttachmentItemHtml(item, opts, false);
+            });
+            body.innerHTML = html;
+        }
+
+        body.dataset.attachMode = modeKey;
+        if (countSpan) countSpan.textContent = filtered.length;
     }
 
 
@@ -2474,23 +2757,29 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
     /**
      * 绘制 OC B 类广播线（固定角度，长度伸缩）
      */
-    function drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, currentDate) {
+    function drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, currentDate, density = 1) {
         ctx.save();
         ctx.lineWidth = 1.5;
         const nowSec = Date.now() / 1000;
+        const dens = Math.max(0.2, Math.min(1, density));
+        const lineCount = Math.max(2, Math.round(5 * dens));
+        // 信件抽样步长：密度低时隔几封画一次，但不归零
+        const letterStep = dens >= 0.95 ? 1 : Math.max(1, Math.round(1 / dens));
+        let letterIdx = 0;
         lettersData.forEach(letter => {
             if (letter.type !== "B" || !letter.isOCSender || !letter.isBroadcast) return;
+            letterIdx++;
+            if ((letterIdx % letterStep) !== 0) return;
             const senderNode = nodeById[letter.sender];
             if (!senderNode || !senderNode.visible) return;
             const letterDate = letter.dateObj ? letter.dateObj : new Date(letter.date);
             if (letterDate > currentDate) return;
             const sp = getDisplayPos(senderNode);
 
-            const lineCount = 5;
             if (!letter._bcastState) {
                 letter._bcastState = { angles: [], phases: [], baseLen: [], amps: [], speeds: [] };
-                for (let ii = 0; ii < lineCount; ii++) {
-                    letter._bcastState.angles[ii] = (2 * Math.PI * ii / lineCount) + (Math.random() - 0.5) * 0.06;
+                for (let ii = 0; ii < 5; ii++) {
+                    letter._bcastState.angles[ii] = (2 * Math.PI * ii / 5) + (Math.random() - 0.5) * 0.06;
                     letter._bcastState.phases[ii] = Math.random() * Math.PI * 2;
                     letter._bcastState.baseLen[ii] = 28 + ii * 8 + Math.random() * 6;
                     letter._bcastState.amps[ii] = 6 + Math.random() * 16;
@@ -2505,12 +2794,7 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 const ex = sp.x + Math.cos(ang) * len;
                 const ey = sp.y + Math.sin(ang) * len;
 
-                const grad = ctx.createLinearGradient(sp.x, sp.y, ex, ey);
-                grad.addColorStop(0.0, 'rgba(255,140,120,0.65)');
-                grad.addColorStop(0.6, 'rgba(255,140,120,0.65)');
-                grad.addColorStop(1.0, 'rgba(255,140,120,0.65)');
-
-                ctx.strokeStyle = grad;
+                ctx.strokeStyle = 'rgba(255,140,120,0.65)';
                 ctx.lineWidth = 1.4;
                 ctx.beginPath();
                 ctx.moveTo(sp.x, sp.y);
@@ -2555,12 +2839,14 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
     /**
      * 绘制脉冲环（动画效果）
      */
-    function drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos) {
+    function drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos, viewBox = null) {
         ctx.save();
-        pulseRings.forEach(p => {
+        for (let i = 0; i < pulseRings.length; i++) {
+            const p = pulseRings[i];
             const ownerNode = nodeById[p.ownerId];
-            if (!ownerNode || !ownerNode.visible) return;
+            if (!ownerNode || !ownerNode.visible) continue;
             const sp = getDisplayPos(ownerNode);
+            if (viewBox && (sp.x < viewBox.minX || sp.x > viewBox.maxX || sp.y < viewBox.minY || sp.y > viewBox.maxY)) continue;
 
             if (p.growing) {
                 p.currentRadius += p.speed;
@@ -2576,21 +2862,24 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             ctx.strokeStyle = `hsla(${p.colorH},100%,70%,${Math.max(0.05, fade)})`;
             ctx.arc(sp.x, sp.y, p.currentRadius, 0, Math.PI * 2);
             ctx.stroke();
-        });
+        }
         ctx.restore();
     }
 
     /**
      * 绘制粒子（沿连线运动的光点）
      */
-    function drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl) {
+    function drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl, density = 1) {
         ctx.save();
-        particles.forEach(pr => {
+        const dens = Math.max(0.2, Math.min(1, density));
+        const drawEvery = dens >= 0.95 ? 1 : Math.max(1, Math.ceil(1 / dens));
+        for (let pi = 0; pi < particles.length; pi++) {
+            const pr = particles[pi];
             let l = links[pr.linkIndex];
             if (!l) {
                 const elig = [];
                 for (let ii = 0; ii < links.length; ii++) if (links[ii].type === 'B' || links[ii].type === 'C') elig.push(ii);
-                if (elig.length === 0) return;
+                if (elig.length === 0) continue;
                 pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
                 l = links[pr.linkIndex];
             }
@@ -2603,7 +2892,9 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 if (elig.length > 0) pr.linkIndex = elig[Math.floor(Math.random() * elig.length)];
                 l = links[pr.linkIndex];
             }
-            if (!l || !l.visible) return;
+            // 始终推进位置；密度低时只绘制一部分
+            if ((pi % drawEvery) !== 0) continue;
+            if (!l || !l.visible) continue;
 
             const sPos = getDisplayPos(l.source);
             const tPos = getDisplayPos(l.target);
@@ -2618,7 +2909,7 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             ctx.globalAlpha = 0.95;
             ctx.arc(x, y, pr.size, 0, Math.PI * 2);
             ctx.fill();
-        });
+        }
         ctx.restore();
     }
 
@@ -2627,44 +2918,65 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
      */
     function updateNodeJitter(nodes, nodeJitter) {
         const now = Date.now();
-        nodes.forEach(n => {
+        for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (!n.visible) { n._dx = 0; n._dy = 0; continue; }
             const j = nodeJitter[n.id];
-            if (!j) { n._dx = 0; n._dy = 0; return; }
+            if (!j) { n._dx = 0; n._dy = 0; continue; }
             const t = now * j.speed + j.phase;
             n._dx = Math.sin(t) * j.ampX;
             n._dy = Math.cos(t) * j.ampY;
-        });
+        }
     }
 
     /**
-     * 绘制节点
+     * 绘制节点（平面圆；收发信短促闪一下）
      */
-    function drawNodes(ctx, nodes, getDisplayPos) {
+    function drawNodes(ctx, nodes, getDisplayPos, opts = {}) {
+        const now = opts.now || Date.now();
+        const useShadow = opts.useShadow !== false;
+        const viewBox = opts.viewBox || null;
         ctx.save();
-        nodes.forEach((n, i) => {
-            if (!n.visible) return;
+        for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (!n.visible) continue;
             const d = getDisplayPos(n);
+            if (viewBox) {
+                if (d.x < viewBox.minX || d.x > viewBox.maxX || d.y < viewBox.minY || d.y > viewBox.maxY) continue;
+            }
 
+            let r = n.r;
+            let alphaBoost = 0;
+            if (n._breathUntil && now < n._breathUntil) {
+                const life = 1 - (n._breathUntil - now) / (n._breathDur || 280);
+                const flash = Math.sin(Math.max(0, Math.min(1, life)) * Math.PI);
+                r = n.r * (1 + 0.22 * flash);
+                alphaBoost = 0.25 * flash;
+            } else if (n._breathUntil && now >= n._breathUntil) {
+                n._breathUntil = 0;
+            }
+
+            const baseA = n.isOC ? 0.75 : 0.6;
             ctx.beginPath();
-            ctx.fillStyle = n.isOC ? `hsla(${120 + (i * 12) % 360},100%,60%,0.75)` : `hsla(${180 + (i * 8) % 360},100%,55%,0.6)`;
-            ctx.shadowColor = 'rgba(0,255,255,0.18)';
-            ctx.shadowBlur = n.isOC ? 6 : 3;
-            ctx.arc(d.x, d.y, n.r, 0, Math.PI * 2);
+            ctx.fillStyle = n.isOC
+                ? `hsla(${120 + (i * 12) % 360},100%,${60 + alphaBoost * 40}%,${Math.min(0.95, baseA + alphaBoost)})`
+                : `hsla(${180 + (i * 8) % 360},100%,${55 + alphaBoost * 35}%,${Math.min(0.9, baseA + alphaBoost)})`;
+            if (useShadow) {
+                ctx.shadowColor = alphaBoost > 0.05 ? 'rgba(255,220,120,0.45)' : 'rgba(0,255,255,0.18)';
+                ctx.shadowBlur = alphaBoost > 0.05 ? 10 : (n.isOC ? 6 : 3);
+            }
+            ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
             ctx.fill();
-            ctx.shadowBlur = 0;
-
-            // if (n.isOC) {
-            //     ctx.save();
-            //     ctx.fillStyle = 'white';
-            //     ctx.font = `${Math.max(8, Math.floor(n.r * 0.7))}px zpix, sans-serif`;
-            //     ctx.textAlign = 'center';
-            //     ctx.textBaseline = 'middle';
-            //     ctx.fillText('OC', d.x, d.y);
-            //     ctx.restore();
-            // }
-            // 取消显示oc字样
-        });
+            if (useShadow) ctx.shadowBlur = 0;
+        }
         ctx.restore();
+    }
+
+    /** 触发节点收发信短促闪烁 */
+    function triggerNodeBreath(node, dur = 280) {
+        if (!node) return;
+        node._breathUntil = Date.now() + dur;
+        node._breathDur = dur;
     }
 
     /**
@@ -2767,18 +3079,44 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         let lastAttachUpdateDayStr = "";
         window.__attachSortDesc = true;
         window.__attachSortChanged = true;
+        window.__personAttachSortDesc = true;
+        window.__personAttachSortChanged = true;
+        window.__personAttachFilterType = 'all';
+
+        // 性能：未回复高亮按日缓存；OC 名集只建一次
+        const ocNameSet = new Set((ocData || []).map(oc => oc.name));
+        let unrepliedCacheDay = "";
+        let unrepliedCacheMap = null;
+        let lastBreathDayStr = "";
+        let lastPersonPanelKey = "";
+
+        // 按日索引信件，便于呼吸闪烁 O(当天) 而非全量扫描
+        const lettersByDay = new Map();
+        (lettersData || []).forEach(l => {
+            const d = l.dateObj ? l.dateObj.toISOString().slice(0, 10) : String(l.date || '').slice(0, 10);
+            if (!d) return;
+            if (!lettersByDay.has(d)) lettersByDay.set(d, []);
+            lettersByDay.get(d).push(l);
+        });
 
         function onTick() {
             if (!dateState.current || !(dateState.current instanceof Date)) {
                 dateState.current = new Date(minDate);
             }
 
-            nodes.forEach(n => { n.visible = n.registerDateObj <= dateState.current; });
-            links.forEach(l => {
-                l.visible = (l.source.registerDateObj <= dateState.current) &&
-                    (l.target.registerDateObj <= dateState.current) &&
-                    (l.dateObj <= dateState.current);
-            });
+            const cur = dateState.current;
+            let visibleNodeCount = 0;
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                n.visible = n.registerDateObj <= cur;
+                if (n.visible) visibleNodeCount++;
+            }
+            for (let i = 0; i < links.length; i++) {
+                const l = links[i];
+                l.visible = (l.source.registerDateObj <= cur) &&
+                    (l.target.registerDateObj <= cur) &&
+                    (l.dateObj <= cur);
+            }
 
             const now = Date.now();
             if (typeof onTick._lastNow === 'undefined') onTick._lastNow = now;
@@ -2786,6 +3124,17 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             onTick._lastNow = now;
 
             updateNodeInertia(nodes, dt);
+
+            const cssW = canvas.width / DPR;
+            const cssH = canvas.height / DPR;
+            // 视口裁剪（世界坐标）
+            const margin = 80 / Math.max(0.05, view.scale);
+            const viewBox = {
+                minX: (-view.tx) / view.scale - margin,
+                maxX: (cssW - view.tx) / view.scale + margin,
+                minY: (-view.ty) / view.scale - margin,
+                maxY: (cssH - view.ty) / view.scale + margin
+            };
 
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2796,13 +3145,44 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             const enableLastLetterHighlight = toggleLastLetter ? toggleLastLetter.checked : false;
             let unrepliedMap = null;
 
+            const curDayStr = cur.toISOString().slice(0, 10);
             if (enableLastLetterHighlight) {
-                const ocNameSet = new Set((ocData || []).map(oc => oc.name));
-                const visibleLetters = lettersData.filter(l => {
-                    const ld = new Date(l.date);
-                    return ld <= dateState.current;
-                });
-                unrepliedMap = computeUnrepliedCLetters(visibleLetters, dateState.current, ocNameSet);
+                if (unrepliedCacheDay !== curDayStr) {
+                    const visibleLetters = lettersData.filter(l => (l.dateObj || new Date(l.date)) <= cur);
+                    unrepliedCacheMap = computeUnrepliedCLetters(visibleLetters, cur, ocNameSet);
+                    unrepliedCacheDay = curDayStr;
+                }
+                unrepliedMap = unrepliedCacheMap;
+            }
+
+            // 日期推进时：当天有收发信的节点呼吸闪烁
+            if (curDayStr !== lastBreathDayStr) {
+                const dayLetters = lettersByDay.get(curDayStr) || [];
+                for (let i = 0; i < dayLetters.length; i++) {
+                    const letter = dayLetters[i];
+                    const sn = nodeById[letter.sender];
+                    if (sn) triggerNodeBreath(sn);
+                    const recs = letter.receivers || [];
+                    if (recs.length) {
+                        for (let j = 0; j < recs.length; j++) {
+                            const rn = nodeById[recs[j]];
+                            if (rn) triggerNodeBreath(rn);
+                        }
+                    } else if (!letter.isOCSender) {
+                        // 收信 A 等无 receivers 字段：默认点亮所有 OC
+                        ocNameSet.forEach(name => {
+                            const rn = nodeById[name];
+                            if (rn) triggerNodeBreath(rn);
+                        });
+                    }
+                }
+                lastBreathDayStr = curDayStr;
+            }
+
+            // 人物柜关闭时清除选中
+            if (window.__forceClearSelectedNode) {
+                if (typeof interactionHandlers.clearSelectedNode === 'function') interactionHandlers.clearSelectedNode();
+                window.__forceClearSelectedNode = false;
             }
 
             // ✅ 获取选中节点（不再用 hoveredNode）
@@ -2811,15 +3191,24 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             const hoveredRing = interactionHandlers.getHoveredRing();
             const hoveredBroadcast = interactionHandlers.getHoveredBroadcast();
 
+            // 节点多 / 缩放过小时降低特效密度，但不彻底关掉
+            let fxDensity = 1;
+            if (visibleNodeCount > 70) fxDensity *= 0.65;
+            if (visibleNodeCount > 120) fxDensity *= 0.7;
+            if (view.scale < 0.35) fxDensity *= 0.7;
+            if (view.scale < 0.18) fxDensity *= 0.65;
+            fxDensity = Math.max(0.22, fxDensity);
+            const useNodeShadow = visibleNodeCount <= 140 && view.scale >= 0.12;
+
             // 绘制（传入 selectedNode）
             drawStars(ctx, canvas, DPR);
             drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLastLetterHighlight, unrepliedMap, selectedNode);
-            drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, dateState.current);
-            drawARings(ctx, senderRings, getNodeByName, getDisplayPos, dateState.current);
-            drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos);
-            drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl);
+            drawBroadcastLines(ctx, lettersData, nodeById, getDisplayPos, cur, fxDensity);
+            drawARings(ctx, senderRings, getNodeByName, getDisplayPos, cur);
+            drawPulseRings(ctx, pulseRings, nodeById, getDisplayPos, viewBox);
+            drawParticles(ctx, particles, links, getDisplayPos, computeQuadraticControl, fxDensity);
             updateNodeJitter(nodes, nodeJitter);
-            drawNodes(ctx, nodes, getDisplayPos);
+            drawNodes(ctx, nodes, getDisplayPos, { now, useShadow: useNodeShadow, viewBox });
 
 
             // ✅ 高亮选中节点（用原 hoveredNode 逻辑）
@@ -2834,11 +3223,10 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             if (toggleCb && toggleCb.checked) {
                 if (panelEl.style.display !== 'block') panelEl.style.display = 'block';
                 
-                const curDayStr = dateState.current.toISOString().slice(0, 10);
                 const curWin = parseInt(windowInput.value) || 14;
                 
                 if (curDayStr !== lastChartUpdateDayStr || curWin !== lastChartUpdateWindow || window.__forceChartRedraw) {
-                    updateDailyStatsUI(dateState.current, curWin, dailyStatsMap);
+                    updateDailyStatsUI(cur, curWin, dailyStatsMap);
                     lastChartUpdateDayStr = curDayStr;
                     lastChartUpdateWindow = curWin;
                     window.__forceChartRedraw = false;
@@ -2853,15 +3241,50 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             if (attachCb && attachCb.checked) {
                 if (attachPanel.style.display !== 'flex') attachPanel.style.display = 'flex';
                 
-                const curDayStr = dateState.current.toISOString().slice(0, 10);
                 if (curDayStr !== lastAttachUpdateDayStr || window.__attachSortChanged) {
-                    // 【修复】加上了 window.__attachFilterType 保证筛选能生效
-                    renderAttachmentList(window.__globalAttachmentsData, dateState.current, window.__attachSortDesc, window.__attachFilterType || 'all');
+                    renderAttachmentList(
+                        window.__globalAttachmentsData,
+                        cur,
+                        window.__attachSortDesc,
+                        window.__attachFilterType || 'all',
+                        { bodyId: 'attachListBody', countId: 'attachCountSpan' }
+                    );
                     lastAttachUpdateDayStr = curDayStr;
                     window.__attachSortChanged = false;
                 }
             } else {
                 if (attachPanel && attachPanel.style.display !== 'none') attachPanel.style.display = 'none';
+            }
+
+            // 选中节点 → 「xx寄来之物」人物附件柜
+            const personPanel = document.getElementById('personAttachWindow');
+            const personTitle = document.getElementById('personAttachTitle');
+            if (personPanel) {
+                if (selectedNode) {
+                    if (personPanel.style.display !== 'flex') personPanel.style.display = 'flex';
+                    const personKey = selectedNode.id + '|' + curDayStr + '|' + (window.__personAttachFilterType || 'all') + '|' + (window.__personAttachSortDesc ? '1' : '0') + '|' + (isAnonymizeOn() ? '1' : '0');
+                    if (personKey !== lastPersonPanelKey || window.__personAttachSortChanged) {
+                        if (personTitle) {
+                            personTitle.textContent = `${displayPersonNamePlain(selectedNode.id)}寄来之物`;
+                        }
+                        renderAttachmentList(
+                            window.__globalAttachmentsData,
+                            cur,
+                            window.__personAttachSortDesc !== false,
+                            window.__personAttachFilterType || 'all',
+                            {
+                                bodyId: 'personAttachListBody',
+                                countId: 'personAttachCountSpan',
+                                personName: selectedNode.id
+                            }
+                        );
+                        lastPersonPanelKey = personKey;
+                        window.__personAttachSortChanged = false;
+                    }
+                } else if (personPanel.style.display !== 'none') {
+                    personPanel.style.display = 'none';
+                    lastPersonPanelKey = '';
+                }
             }
         }
 
@@ -2876,6 +3299,34 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         return String(s).replace(/[&<>"']/g, ch => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": "&#39;"
         }[ch]));
+    }
+
+    function isAnonymizeOn() {
+        const cb = document.getElementById('toggleAnonymize');
+        return !!(cb && cb.checked);
+    }
+
+    /** 匿名化统一用 ***（兼容像素字体，避免空方块不显示） */
+    function displayPersonName(name) {
+        if (isAnonymizeOn()) return '***';
+        return escapeHtml(name == null ? '' : String(name));
+    }
+
+    function displayPersonNamePlain(name) {
+        if (isAnonymizeOn()) return '***';
+        return String(name == null ? '' : name);
+    }
+
+    function displayPersonList(str) {
+        const parts = String(str == null ? '' : str).split(',').map(s => s.trim()).filter(Boolean);
+        if (!parts.length) return isAnonymizeOn() ? '***' : '';
+        return parts.map(displayPersonName).join(', ');
+    }
+
+    function displayPersonListPlain(str) {
+        const parts = String(str == null ? '' : str).split(',').map(s => s.trim()).filter(Boolean);
+        if (!parts.length) return isAnonymizeOn() ? '***' : '';
+        return parts.map(displayPersonNamePlain).join(', ');
     }
 
     /**
@@ -3579,11 +4030,12 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
     /* 【新增】附件收纳窗样式 */
     .attachment-window {
         position: fixed;
-        left: 20px;
+        left: auto;
+        right: 20px;
         bottom: 120px;
-        width: 320px;
-        height: 480px;
-        max-height: 60vh;
+        width: 380px;
+        height: 520px;
+        max-height: 68vh;
         background: rgba(10, 20, 30, 0.92);
         border: 2px solid #3f6385;
         border-radius: 8px;
@@ -3592,12 +4044,46 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         flex-direction: column;
         color: #b7c7d6;
         font-family: 'zpix', sans-serif;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 180, 255, 0.12);
         backdrop-filter: blur(8px);
+    }
+    .person-attach-window {
+        left: 20px;
+        right: auto;
+        border-color: #6a4a85;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 24px rgba(180, 100, 255, 0.14);
+    }
+    .person-attach-window .attach-hdr {
+        background: rgba(120, 60, 160, 0.28);
+        color: #e0b0ff;
+        border-bottom-color: rgba(200, 120, 255, 0.25);
+    }
+    /* 信件正文内嵌图片 */
+    .letter-attach-gallery {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        border-top: 1px dashed rgba(63, 99, 133, 0.5);
+        padding-top: 10px;
+    }
+    .letter-attach-gallery img {
+        max-width: 100%;
+        max-height: 280px;
+        object-fit: contain;
+        border-radius: 4px;
+        border: 1px solid rgba(0, 200, 255, 0.35);
+        background: rgba(0, 0, 0, 0.35);
+        cursor: zoom-in;
+    }
+    .letter-attach-cap {
+        font-size: 11px;
+        color: #9ec8dd;
+        margin-top: 2px;
     }
     .attach-hdr {
         background: rgba(0, 120, 180, 0.3);
-        padding: 10px 14px;
+        padding: 10px 12px;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -3605,36 +4091,38 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         cursor: move;
         font-weight: bold;
         color: #00f7ff;
-        font-size: 15px;
+        font-size: 14px;
+        gap: 8px;
+        flex-wrap: wrap;
     }
     .attach-hdr button {
-        background: rgba(0, 50, 100, 0.5); border: 1px solid rgba(0,200,255,0.4); border-radius: 4px; color: #9ff; cursor: pointer; margin-left: 8px; font-family: 'zpix', sans-serif; font-size: 13px; padding: 3px 6px;
+        background: rgba(0, 50, 100, 0.5); border: 1px solid rgba(0,200,255,0.4); border-radius: 4px; color: #9ff; cursor: pointer; font-family: 'zpix', sans-serif; font-size: 12px; padding: 3px 6px;
     }
     .attach-hdr button:hover { background: rgba(0, 100, 150, 0.8); }
-    
+
    /* 筛选下拉：圆角 & 深色风格，与其他控件一致 */
-   #attachFilterSelect {
-       background: rgba(6, 22,  Thirty, 0.9); /* fallback，见下一行真实颜色 */
-       background: #0b2230; /* 深色底，保证对比更强 */
+   #attachFilterSelect,
+   #personAttachFilterSelect {
+       background: #0b2230;
        color: #bfefff;
        border: 1.5px solid rgba(63,99,133,0.9);
-       padding: 5px 8px;
+       padding: 4px 6px;
        border-radius: 6px;
        font-family: 'zpix', sans-serif;
-       font-size: 13px;
+       font-size: 12px;
        cursor: pointer;
        outline: none;
        box-shadow: none;
+       max-width: 72px;
    }
-   #attachFilterSelect:focus {
+   #attachFilterSelect:focus,
+   #personAttachFilterSelect:focus {
        border-color: #00f7ff;
        box-shadow: 0 0 8px rgba(0,247,255,0.12);
    }
    /* 使 header 内右侧控件水平对齐且间距合理 */
-   .attach-hdr > div { display: flex; align-items: center; gap: 8px; }
-    
-    
-    
+   .attach-hdr > div { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
     .attach-body {
         flex: 1;
         overflow-y: auto;
@@ -3650,17 +4138,131 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         border: 1px solid rgba(63, 99, 133, 0.5);
         margin-bottom: 8px;
         padding: 8px;
-        border-radius: 4px;
+        border-radius: 6px;
+        opacity: 1;
+        transform: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .attach-item.is-settled {
+        opacity: 1;
+        transform: none;
+        animation: none;
+    }
+    /* 仅「新送达」条目轻入场，日期更迭时旧条目不闪 */
+    .attach-item.is-just-added {
+        opacity: 0;
+        transform: translateY(8px);
+        animation: attachItemIn 0.35s ease forwards;
+        border-color: rgba(255, 200, 80, 0.65);
+        box-shadow: 0 0 16px rgba(255, 180, 40, 0.22);
+    }
+    .attach-item:hover {
+        border-color: rgba(0, 220, 255, 0.55);
+        box-shadow: 0 0 14px rgba(0, 180, 255, 0.15);
+    }
+    @keyframes attachItemIn {
+        to { opacity: 1; transform: translateY(0); }
     }
     .attach-item-row {
-        display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;
+        display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .attach-date { color: #b7c7d6; display: inline-flex; align-items: center; gap: 6px; }
+    .attach-people { color: #ffeeaa; font-size: 12px; }
+    .attach-kind-tag {
+        font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; opacity: 0.9;
+    }
+    .tag-text { color: #9fdfff; }
+    .tag-image { color: #ffcc66; }
+    .tag-file { color: #c9b8ff; }
+    .attach-badge-new {
+        font-size: 10px; color: #201000; background: linear-gradient(90deg, #ffd36a, #ffaa33);
+        padding: 1px 6px; border-radius: 999px; font-weight: bold; animation: attachPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes attachPulse {
+        0%, 100% { filter: brightness(1); }
+        50% { filter: brightness(1.25); }
     }
     .attach-item-content {
-        color: #dff; word-break: break-all; margin-top: 6px; border-top: 1px dashed rgba(63, 99, 133, 0.4); padding-top: 6px; line-height: 1.4;
+        color: #dff; word-break: break-word; margin-top: 6px; border-top: 1px dashed rgba(63, 99, 133, 0.4); padding-top: 6px; line-height: 1.45;
     }
+    .attach-quote {
+        position: relative;
+        background: rgba(0, 60, 90, 0.25);
+        border-left: 3px solid rgba(0, 220, 255, 0.55);
+        padding: 8px 10px;
+        border-radius: 0 4px 4px 0;
+        white-space: pre-wrap;
+    }
+    .attach-thumb-btn {
+        display: block; width: 100%; margin-top: 8px; padding: 0; border: 1px solid rgba(255, 200, 100, 0.35);
+        border-radius: 6px; background: rgba(20, 16, 8, 0.55); cursor: zoom-in; overflow: hidden; text-align: left;
+        font-family: inherit; color: inherit;
+    }
+    .attach-thumb-btn:hover { border-color: rgba(255, 220, 120, 0.8); box-shadow: 0 0 18px rgba(255, 180, 40, 0.25); }
+    .attach-thumb {
+        display: block; width: 100%; max-height: 180px; object-fit: cover; background:
+            repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 6px, transparent 6px 12px);
+        min-height: 72px;
+    }
+    .attach-thumb.broken {
+        min-height: 64px; object-fit: none; padding: 20px; color: #f88; font-size: 12px;
+    }
+    .attach-thumb-name {
+        display: block; padding: 5px 8px; font-size: 11px; color: #ffe0a0;
+        border-top: 1px solid rgba(255, 200, 100, 0.2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .attach-file-card {
+        display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px;
+        border: 1px solid rgba(180, 150, 255, 0.35); border-radius: 6px; background: rgba(40, 24, 70, 0.35);
+        text-decoration: none; color: #e8deff; transition: border-color 0.15s, background 0.15s;
+    }
+    .attach-file-card:hover { border-color: rgba(210, 180, 255, 0.8); background: rgba(60, 36, 100, 0.5); }
+    .attach-file-icon {
+        flex: 0 0 34px; width: 34px; height: 40px; border-radius: 3px;
+        background: linear-gradient(180deg, #d8c8ff 0%, #a890e8 100%);
+        position: relative; box-shadow: inset 0 -2px 0 rgba(0,0,0,0.15);
+    }
+    .attach-file-icon::before {
+        content: ''; position: absolute; top: 0; right: 0;
+        border-style: solid; border-width: 0 10px 10px 0;
+        border-color: transparent #2a1a4a transparent transparent;
+    }
+    .attach-file-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .attach-file-name { font-size: 13px; color: #f0e8ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .attach-file-path { font-size: 10px; color: #9a90b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .attach-foot {
-        padding: 8px 12px; font-size: 13px; text-align: right; border-top: 1px solid rgba(0, 200, 255, 0.2); background: rgba(0, 0, 0, 0.3); font-weight: bold; color: #e6f9ff;
+        padding: 8px 12px; font-size: 12px; text-align: right; border-top: 1px solid rgba(0, 200, 255, 0.2); background: rgba(0, 0, 0, 0.3); font-weight: bold; color: #e6f9ff;
     }
+
+    /* 附件灯箱 */
+    .attach-lightbox {
+        position: fixed; inset: 0; z-index: 5000; display: flex; align-items: center; justify-content: center;
+    }
+    .attach-lightbox[hidden] { display: none !important; }
+    .attach-lightbox-backdrop {
+        position: absolute; inset: 0; background: rgba(0, 8, 16, 0.82); backdrop-filter: blur(6px);
+    }
+    .attach-lightbox-panel {
+        position: relative; z-index: 1; max-width: min(92vw, 960px); max-height: 90vh;
+        display: flex; flex-direction: column; align-items: center; gap: 10px;
+        animation: attachItemIn 0.25s ease;
+    }
+    .attach-lightbox-panel img {
+        max-width: 92vw; max-height: 78vh; object-fit: contain;
+        border: 2px solid rgba(0, 220, 255, 0.45); border-radius: 6px;
+        box-shadow: 0 0 40px rgba(0, 180, 255, 0.25); background: #061018;
+    }
+    .attach-lightbox-caption {
+        color: #cfefff; font-size: 13px; text-align: center; max-width: 90vw;
+        text-shadow: 0 1px 4px #000; padding: 0 12px;
+    }
+    .attach-lightbox-close {
+        position: absolute; top: -12px; right: -12px; z-index: 2;
+        width: 32px; height: 32px; border-radius: 50%;
+        background: rgba(0, 40, 70, 0.9); border: 1px solid rgba(0, 220, 255, 0.5);
+        color: #9ff; cursor: pointer; font-family: 'zpix', sans-serif; font-size: 14px;
+    }
+    .attach-lightbox-close:hover { background: rgba(0, 90, 130, 0.95); }
 </style>
 
 
@@ -3688,11 +4290,42 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
 
         function normPath(p) { return String(p || '').replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '').replace(/\/+/g, '/'); }
         function guessContentType(p) {
-            p = p.toLowerCase();
+            p = String(p || '').toLowerCase().split('?')[0];
             if (p.endsWith('.tsv')) return 'text/tab-separated-values; charset=utf-8';
-            if (p.endsWith('.txt')) return 'text/plain; charset=utf-8';
-            return 'text/plain; charset=utf-8';
+            if (p.endsWith('.txt') || p.endsWith('.md') || p.endsWith('.csv')) return 'text/plain; charset=utf-8';
+            if (p.endsWith('.png')) return 'image/png';
+            if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
+            if (p.endsWith('.gif')) return 'image/gif';
+            if (p.endsWith('.webp')) return 'image/webp';
+            if (p.endsWith('.bmp')) return 'image/bmp';
+            if (p.endsWith('.svg')) return 'image/svg+xml';
+            if (p.endsWith('.pdf')) return 'application/pdf';
+            return 'application/octet-stream';
         }
+        function isBinaryPath(p) {
+            return /\.(png|jpe?g|gif|webp|bmp|svg|pdf|zip|rar|7z|mp3|mp4|wav|ogg|webm)$/i.test(String(p || '').split('?')[0]);
+        }
+
+        // 附件预览：本地 File → blob URL 缓存
+        const localBlobUrlCache = new Map();
+        window.__resolveLocalBlobUrl = function (rawPath) {
+            if (!localFilesMap || !rawPath) return null;
+            let key = normPath(rawPath).toLowerCase();
+            if (key.startsWith('./')) key = key.slice(2);
+            if (localBlobUrlCache.has(key)) return localBlobUrlCache.get(key);
+
+            let file = localFilesMap.get(key) || null;
+            if (!file) {
+                const fallbackKey = Array.from(localFilesMap.keys()).find(mk =>
+                    key.endsWith(mk) || mk.endsWith(key) || key.includes(mk) || mk.includes(key)
+                );
+                if (fallbackKey) file = localFilesMap.get(fallbackKey);
+            }
+            if (!file) return null;
+            const url = URL.createObjectURL(file);
+            localBlobUrlCache.set(key, url);
+            return url;
+        };
 
         // 引导界面元素
         const overlay = document.getElementById('introOverlay');
@@ -3762,18 +4395,22 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                                     key = key.slice(key.indexOf('/email/') + 1);
                                 
                                 if (localFilesMap) {
+                                    async function respondLocalFile(file, fileKey) {
+                                        const ctype = guessContentType(fileKey);
+                                        if (isBinaryPath(fileKey)) {
+                                            return new Response(file, { status: 200, headers: { 'Content-Type': ctype } });
+                                        }
+                                        const text = await file.text();
+                                        return new Response(text, { status: 200, headers: { 'Content-Type': ctype } });
+                                    }
                                     // 1. 常规精准匹配
                                     if (localFilesMap.has(key)) {
-                                        const file = localFilesMap.get(key);
-                                        const text = await file.text();
-                                        return new Response(text, { status: 200, headers: { 'Content-Type': guessContentType(key) } });
+                                        return respondLocalFile(localFilesMap.get(key), key);
                                     }
                                     // 2. 尾部模糊匹配 (对付如 #和中文夹杂所产生的匹配死角)
                                     const fallbackKey = Array.from(localFilesMap.keys()).find(mk => key.endsWith(mk) || mk.endsWith(key) || key.includes(mk));
                                     if (fallbackKey) {
-                                        const file = localFilesMap.get(fallbackKey);
-                                        const text = await file.text();
-                                        return new Response(text, { status: 200, headers: { 'Content-Type': guessContentType(fallbackKey) } });
+                                        return respondLocalFile(localFilesMap.get(fallbackKey), fallbackKey);
                                     }
                                 }
                             } catch (e) { console.debug('[local-fetch fallback]', e); }
@@ -3961,6 +4598,28 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         const closeBtn = document.getElementById('flagMenuCloseBtn');
         btn.onclick = () => { popup.style.display = 'block'; };
         closeBtn.onclick = () => { popup.style.display = 'none'; };
+
+        // 滑条失焦后才能顺利收纳
+        const controlsEl = document.querySelector('.controls');
+        if (controlsEl) {
+            controlsEl.addEventListener('mouseleave', () => {
+                const ae = document.activeElement;
+                if (ae && controlsEl.contains(ae) && typeof ae.blur === 'function') ae.blur();
+            });
+        }
+
+        const anonCb = document.getElementById('toggleAnonymize');
+        if (anonCb) {
+            anonCb.addEventListener('change', () => {
+                window.__attachSortChanged = true;
+                window.__personAttachSortChanged = true;
+                // 强制整表重建（匿名开关不算增量插入）
+                ['attachListBody', 'personAttachListBody'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.dataset.attachMode = '';
+                });
+            });
+        }
         // 点击弹窗外部关闭
         document.addEventListener('mousedown', function (e) {
             if (popup.style.display === 'block' && !popup.contains(e.target) && e.target !== btn) {
@@ -3990,6 +4649,7 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
                 attachWin.style.left = (e.clientX - attachDragDX) + 'px';
                 attachWin.style.top = (e.clientY - attachDragDY) + 'px';
                 attachWin.style.bottom = 'auto'; // 解除CSS的bottom限制
+                attachWin.style.right = 'auto';
             });
             document.addEventListener('mouseup', () => { attachIsDragging = false; });
         }
@@ -4020,6 +4680,84 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
             attachFilterSelect.addEventListener('change', () => {
                 window.__attachFilterType = attachFilterSelect.value || 'all';
                 window.__attachSortChanged = true;
+            });
+        }
+
+        // 人物附件柜：拖拽 / 排序 / 筛选 / 关闭
+        const personWin = document.getElementById('personAttachWindow');
+        const personHdr = document.getElementById('personAttachHdr');
+        let personIsDragging = false, personDragDX = 0, personDragDY = 0;
+        if (personHdr && personWin) {
+            personHdr.addEventListener('mousedown', (e) => {
+                const tag = e.target.tagName.toLowerCase();
+                if (tag === 'button' || tag === 'select' || tag === 'option') return;
+                personIsDragging = true;
+                const rect = personWin.getBoundingClientRect();
+                personDragDX = e.clientX - rect.left;
+                personDragDY = e.clientY - rect.top;
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!personIsDragging) return;
+                personWin.style.left = (e.clientX - personDragDX) + 'px';
+                personWin.style.top = (e.clientY - personDragDY) + 'px';
+                personWin.style.bottom = 'auto';
+                personWin.style.right = 'auto';
+            });
+            document.addEventListener('mouseup', () => { personIsDragging = false; });
+        }
+        const personCloseBtn = document.getElementById('personAttachCloseBtn');
+        if (personCloseBtn && personWin) {
+            personCloseBtn.addEventListener('click', () => {
+                personWin.style.display = 'none';
+                // 关闭时清除选中：通过派发标记让下一帧不展示（选中态在 interactionHandlers 内）
+                window.__forceClearSelectedNode = true;
+            });
+        }
+        const personSortBtn = document.getElementById('personAttachSortBtn');
+        if (personSortBtn) {
+            window.__personAttachSortDesc = true;
+            personSortBtn.addEventListener('click', () => {
+                window.__personAttachSortDesc = !window.__personAttachSortDesc;
+                personSortBtn.textContent = window.__personAttachSortDesc ? '倒序' : '正序';
+                window.__personAttachSortChanged = true;
+            });
+        }
+        const personFilterSelect = document.getElementById('personAttachFilterSelect');
+        if (personFilterSelect) {
+            window.__personAttachFilterType = personFilterSelect.value || 'all';
+            personFilterSelect.addEventListener('change', () => {
+                window.__personAttachFilterType = personFilterSelect.value || 'all';
+                window.__personAttachSortChanged = true;
+            });
+        }
+
+        // 附件缩略图 / 信件内嵌图 → 灯箱（事件委托覆盖收纳柜、人物柜、信件弹窗）
+        const attachLightbox = document.getElementById('attachLightbox');
+        const attachLightboxImg = document.getElementById('attachLightboxImg');
+        const attachLightboxCaption = document.getElementById('attachLightboxCaption');
+        function closeAttachLightbox() {
+            if (!attachLightbox) return;
+            attachLightbox.hidden = true;
+            if (attachLightboxImg) attachLightboxImg.removeAttribute('src');
+        }
+        function openAttachLightbox(src, caption) {
+            if (!attachLightbox || !attachLightboxImg || !src) return;
+            attachLightboxImg.src = src;
+            if (attachLightboxCaption) attachLightboxCaption.textContent = caption || '';
+            attachLightbox.hidden = false;
+        }
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-attach-preview]');
+            if (!btn) return;
+            e.preventDefault();
+            openAttachLightbox(btn.getAttribute('data-attach-preview'), btn.getAttribute('data-attach-caption'));
+        });
+        if (attachLightbox) {
+            attachLightbox.querySelector('.attach-lightbox-backdrop')?.addEventListener('click', closeAttachLightbox);
+            attachLightbox.querySelector('.attach-lightbox-close')?.addEventListener('click', closeAttachLightbox);
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && attachLightbox && !attachLightbox.hidden) closeAttachLightbox();
             });
         }
 

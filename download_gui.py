@@ -17,7 +17,22 @@ import sys
 from PIL import Image, ImageTk  # 需要安装: pip install pillow
 import subprocess
 import webbrowser
-from tkcalendar import DateEntry  # 需要安装: pip install tkcalendar
+from tkcalendar import Calendar  # 需要安装: pip install tkcalendar
+
+# 登录页「帮助」文案（可直接改这里；留空则用下方默认说明）
+LOGIN_EXTRA_HELP = """
+"""
+LOGIN_HELP_DEFAULT = (
+    "1. 感谢您使用[地缝可视化]程序！\n"
+    "2. 本程序需要进行以下操作：\n"
+    "   - 开启 IMAP 服务（允许本程序登录邮箱并找到地缝相关信件）\n"
+    "   - 注册你的 OC 并下载来往信件\n"
+    "   - 如有必要，对一些错误识别的信件手动纠正\n"
+    "   - 打开可视化观赏\n"
+    "   - 你可以在信件库存内对已有的信件进行改动\n"
+    "3. 如遇到任何问题，请在企划群内询问。\n"
+    "4. 本程序不涉及任何对隐私信息的暴露问题。"
+)
 import imaplib, ssl, sys
 
 # 神秘bug已解决: 用 ENVELOPE 解析出的 subject 和用 RFC822 头解析出的 subject 不同
@@ -29,7 +44,8 @@ import imaplib, ssl, sys
 # 	第一步，对所有有明确的发件人 收件人的收信，检索其是否在contenttxt中带有附件 的字样	
 # 	若有，则找到
 #  2、增加未匹配手动加入功能
-# 打包后icon没了
+# 打包后任务栏/标题栏 icon：需把 icon 目录打进包，或放在 exe 同级；
+# 运行时用 window_icon.apply_tk_window_icon（参考 TablePet）。
 
 # python -m venv venv
 # venv\Scripts\activate  # Windows
@@ -37,11 +53,13 @@ import imaplib, ssl, sys
 # pip install pyinstaller pillow tkcalendar babel imapclient
 
 # pyinstaller -F -w -i "icon\CrackPost_v1.ico" `
+#     --add-data "icon;icon" `
 #     --hidden-import babel.numbers `
 #     --hidden-import imapclient `
 #     --hidden-import PIL.Image `
 #     --hidden-import PIL.ImageTk `
 #     --hidden-import tkcalendar `
+#     --hidden-import window_icon `
 #     --onefile --windowed --icon=icon\CrackPost_v1.ico `
 #     download_gui.py
 
@@ -52,6 +70,68 @@ if getattr(sys, 'frozen', False):
     script_dir = Path(sys.executable).parent
 else:
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+
+
+def find_app_icons():
+    """定位 ico/png：开发态看源码旁；打包后优先 exe 同级，再回退 _MEIPASS。"""
+    ico_names = ("CrackPost_v1.ico", "CrackPost.ico")
+    png_names = ("CrackPost_v1.png", "CrackPost.png")
+    roots = [script_dir / "icon"]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(meipass) / "icon")
+    ico_path = png_path = None
+    for root in roots:
+        if ico_path is None:
+            for name in ico_names:
+                p = root / name
+                if p.is_file():
+                    ico_path = p
+                    break
+        if png_path is None:
+            for name in png_names:
+                p = root / name
+                if p.is_file():
+                    png_path = p
+                    break
+        if ico_path and png_path:
+            break
+    return ico_path, png_path
+
+
+def apply_app_window_icon(root):
+    """开发与打包后统一设置窗口/任务栏图标。"""
+    ico_path, png_path = find_app_icons()
+    if not ico_path:
+        searched = [script_dir / "icon"]
+        if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", None):
+            searched.append(Path(sys._MEIPASS) / "icon")
+        print(f"[icon] 未找到 ico（已查: {[str(p) for p in searched]}）")
+        return False
+    try:
+        # 顶层同目录模块；打包时靠 --hidden-import window_icon 打进包
+        from window_icon import apply_tk_window_icon
+        return apply_tk_window_icon(
+            root,
+            ico_path,
+            png_path=png_path,
+        )
+    except Exception as e:
+        print(f"[icon] apply_tk_window_icon 失败: {e}")
+        # 回退：仅 iconbitmap / iconphoto
+        try:
+            if sys.platform.startswith("win") and ico_path.is_file():
+                root.iconbitmap(str(ico_path))
+            if png_path and png_path.is_file():
+                pil_img = Image.open(str(png_path)).convert("RGBA")
+                photo = ImageTk.PhotoImage(pil_img.resize((32, 32), Image.LANCZOS))
+                root.iconphoto(True, photo)
+                root._app_icon_fallback = photo
+            return True
+        except Exception as e2:
+            print(f"[icon] 回退也失败: {e2}")
+            return False
 
 log_dir = script_dir / "log"
 log_dir.mkdir(exist_ok=True, parents=True)
@@ -100,10 +180,32 @@ class EmailDownloader:
         self.client = None
         self.search_results = []
         self.oc_registerdata = []
+        self.oc_aliases = {}  # {主名: [别名, ...]}
+        self.last_unmatched = []
         
         # 添加超时设置
         self.timeout = int(self.config.get('Connection', 'timeout', fallback='30'))
         self.batch_size = int(self.config.get('Connection', 'batch_size', fallback='100'))
+        self.crackpost_addrs = {
+            'crackpost2@126.com',
+            'crackpost@126.com',
+        }
+
+    def direction_from_addresses(self, sender, recipients=None):
+        """根据与 crackpost 中转站的关系判定收/发。发出去=发，收进来=收。"""
+        sender_l = (sender or '').lower()
+        recipients = recipients or []
+        crack = {a.lower() for a in self.crackpost_addrs}
+        if sender_l in crack:
+            return "收"
+        for r in recipients:
+            if (r or '').lower() in crack:
+                return "发"
+        # 回退：相对本邮箱
+        me = (self.email_addr or '').lower()
+        if sender_l == me:
+            return "发"
+        return "收"
 
     def extract_letter_type(self, subject):
         """
@@ -316,7 +418,8 @@ class EmailDownloader:
             }
             
             config['Storage'] = {
-                'base_directory': os.path.join(os.path.expanduser('~'), 'email')
+                # 与 exe/源码同级的 email，不要落到用户主目录
+                'base_directory': str(script_dir / 'email')
             }
             
             config['Connection'] = {
@@ -525,6 +628,13 @@ class EmailDownloader:
                     logger.error(f"选择邮箱文件夹失败(尝试 SELECT): {e2}")
                     return []
             logger.info(f"已选择文件夹: {folder}")
+
+            # 一进检索就通知前台，避免长时间停在「0 封」
+            if callback:
+                try:
+                    callback(0, 0)
+                except Exception:
+                    pass
             
             # 构建搜索条件
             search_criteria = []
@@ -547,9 +657,19 @@ class EmailDownloader:
             
             if not msg_ids:
                 logger.info("未找到匹配的邮件")
+                if callback:
+                    try:
+                        callback(100, 0)
+                    except Exception:
+                        pass
                 return []
             
             logger.info(f"找到 {len(msg_ids)} 封邮件，开始处理...")
+            if callback:
+                try:
+                    callback(1, 0)
+                except Exception:
+                    pass
             
             # 如果设置了最大数量，限制处理的邮件数
             if max_emails and len(msg_ids) > max_emails:
@@ -638,58 +758,81 @@ class EmailDownloader:
             matched_emails.sort(key=lambda x: x['date_obj'] if x['date_obj'] else datetime.min, reverse=True)
             
             logger.info(f"成功找到 {len(matched_emails)} 封匹配邮件")
-            # debug输出：显示未匹配邮件的主题（仅收发件邮箱地址正确但主题不匹配）
+            # 筛主题不合规时也可能较慢，保持「正在检索」观感
+            if callback:
+                try:
+                    callback(99, len(matched_emails))
+                except Exception:
+                    pass
+            # 来往地址对得上但主题不合规 → 结构化未匹配，供界面手工补类型/收发件人
             unmatched = []
             if subject_pattern:
+                matched_ids = {e['id'] for e in matched_emails}
                 for msg_id in msg_ids:
-                    # 检查是否已在matched_emails
-                    if not any(e['id'] == msg_id for e in matched_emails):
-                        # 获取邮件信息
-                        try:
-                            response = self.client.fetch([msg_id], ['ENVELOPE'])
-                            envelope = response[msg_id][b'ENVELOPE']
-                            subject = self.decode_mime_header(envelope.subject.decode()) if envelope.subject else ""
-                            subject = re.sub(r'\s+', '', subject)  # 入口处去空格
-                            
-                            # 检查发件人
-                            sender = ""
-                            if envelope.from_ and len(envelope.from_) > 0:
-                                sender = envelope.from_[0].mailbox.decode() + '@' + envelope.from_[0].host.decode()
-                            
-                            # 检查收件人
-                            recipients = []
-                            if envelope.to:
-                                for recipient in envelope.to:
-                                    if recipient.mailbox and recipient.host:
-                                        email_addr = recipient.mailbox.decode() + '@' + recipient.host.decode()
-                                        recipients.append(email_addr)
-                            
-                            # 验证邮箱地址条件
-                            sender_ok = True
-                            recipient_ok = True
-                            if from_address:
-                                from_list = [x.strip() for x in from_address.split(",") if x.strip()]
-                                sender_ok = any(f in sender for f in from_list)
-                            if to_address:
-                                to_list = [x.strip() for x in to_address.split(",") if x.strip()]
-                                recipient_ok = any(any(t in r for t in to_list) for r in recipients)
-                            
-                            # 只有邮箱地址正确但主题不匹配的才加入 unmatched
-                            if sender_ok and recipient_ok:
-                                unmatched.append(subject)
-                                
-                        except Exception as e:
-                            logger.debug(f"处理未匹配邮件时出错 id={msg_id}: {e}")
+                    if msg_id in matched_ids:
+                        continue
+                    try:
+                        response = self.client.fetch([msg_id], ['ENVELOPE'])
+                        envelope = response[msg_id][b'ENVELOPE']
+                        subject = self.decode_mime_header(envelope.subject.decode()) if envelope.subject else ""
+                        subject = re.sub(r'\s+', '', subject)
+
+                        sender = ""
+                        if envelope.from_ and len(envelope.from_) > 0:
+                            sender = envelope.from_[0].mailbox.decode() + '@' + envelope.from_[0].host.decode()
+
+                        recipients = []
+                        if envelope.to:
+                            for recipient in envelope.to:
+                                if recipient.mailbox and recipient.host:
+                                    recipients.append(
+                                        recipient.mailbox.decode() + '@' + recipient.host.decode()
+                                    )
+
+                        sender_ok = True
+                        recipient_ok = True
+                        if from_address:
+                            from_list = [x.strip() for x in from_address.split(",") if x.strip()]
+                            sender_ok = any(f in sender for f in from_list)
+                        if to_address:
+                            to_list = [x.strip() for x in to_address.split(",") if x.strip()]
+                            recipient_ok = any(any(t in r for t in to_list) for r in recipients)
+
+                        if not (sender_ok and recipient_ok):
+                            continue
+
+                        if envelope.date:
+                            if isinstance(envelope.date, datetime):
+                                date_str = envelope.date.strftime("%Y-%m-%d %H:%M:%S")
+                                date_obj = envelope.date
+                            else:
+                                date_str = str(envelope.date)
+                                date_obj = None
+                        else:
+                            date_str = ""
+                            date_obj = None
+
+                        unmatched.append({
+                            'id': msg_id,
+                            'subject': subject,
+                            'sender': sender,
+                            'recipients': recipients,
+                            'date': date_str,
+                            'date_obj': date_obj,
+                            'folder': folder,
+                            'direction': self.direction_from_addresses(sender, recipients),
+                        })
+                    except Exception as e:
+                        logger.debug(f"处理未匹配邮件时出错 id={msg_id}: {e}")
 
                 logger.info(f"总邮件数: {len(msg_ids)}")
                 logger.info(f"匹配当前规则邮件数: {len(matched_emails)}")
                 logger.info(f"未匹配当前规则邮件数: {len(unmatched)}")
                 if unmatched:
                     logger.info(f"未匹配邮件数量: {len(unmatched)}，前{min(300, len(unmatched))}个主题如下：")
-                    for i, subj in enumerate(unmatched[:300]):
-                        print(f"[未匹配{i+1}] {subj}")
-                        
-            # 保存未匹配列表以便 GUI 弹窗展示
+                    for i, item in enumerate(unmatched[:300]):
+                        print(f"[未匹配{i+1}] {item.get('subject', '')}")
+
             self.last_unmatched = unmatched
             return matched_emails
             
@@ -759,7 +902,7 @@ class EmailDownloader:
                 except Exception as e2:
                     return None, f"选择文件夹失败: {str(e2)}"
 
-            # 获取邮件（fetch），fetch 失败时重连并重试一次
+            # 获取邮件（fetch），fetch 失败时重连、重新选文件夹再重试
             try:
                 fetch_data = self.client.fetch([email_id], ['RFC822'])
                 if not fetch_data or email_id not in fetch_data:
@@ -773,6 +916,13 @@ class EmailDownloader:
                 self.client = None
                 if not self.ensure_connected():
                     return None, f"获取邮件失败: 无法重连 ({e})"
+                try:
+                    self.client.select_folder(folder, readonly=True)
+                except Exception:
+                    try:
+                        self.client.select_folder(folder, readonly=False)
+                    except Exception as e_sel:
+                        return None, f"获取邮件失败: 重连后无法选择文件夹 ({e_sel})"
                 try:
                     fetch_data = self.client.fetch([email_id], ['RFC822'])
                     if not fetch_data or email_id not in fetch_data:
@@ -1073,11 +1223,17 @@ class EmailDownloader:
             email_id = email_info['id']
             folder = email_info['folder']
 
+            def _attach_user_overrides(res):
+                for key in ('user_letter_type', 'user_sender_name', 'user_receiver_name', 'user_direction'):
+                    if email_info.get(key):
+                        res[key] = email_info[key]
+                return res
+
             # 判断是否已完整下载
             already, email_dir, reason = self._email_already_downloaded(email_info)
             if already:
                 logger.info(f"✓ 跳过已下载邮件 id={email_id} 主题={email_info.get('subject')}")
-                results.append({
+                results.append(_attach_user_overrides({
                     'subject': email_info.get('subject', ''),
                     'sender': email_info.get('sender', ''),
                     'date': email_info.get('date', ''),
@@ -1088,7 +1244,7 @@ class EmailDownloader:
                     'to_addrs': [],
                     'status': 'skipped',
                     'reason': reason
-                })
+                }))
                 skipped_ids.add(email_id)  # ✅ 修改：单独记录跳过的
             else:
                 # 需要下载
@@ -1097,7 +1253,7 @@ class EmailDownloader:
                 if result:
                     result['status'] = 'success'
                     result['reason'] = '下载成功'
-                    results.append(result)
+                    results.append(_attach_user_overrides(result))
                     succeeded_ids.add(email_id)  # ✅ 只记录真正下载成功的
                     logger.info(f"✓ 下载成功 id={email_id}")
                 else:
@@ -1131,9 +1287,15 @@ class EmailDownloader:
                 
                 # 再次检查
                 already, email_dir, reason = self._email_already_downloaded(email_info)
+                def _attach_ov(res):
+                    for key in ('user_letter_type', 'user_sender_name', 'user_receiver_name', 'user_direction'):
+                        if email_info.get(key):
+                            res[key] = email_info[key]
+                    return res
+
                 if already:
                     logger.info(f"[重试{attempt}] ✓ 已有有效内容 id={email_id}")
-                    results.append({
+                    results.append(_attach_ov({
                         'subject': email_info.get('subject', ''),
                         'sender': email_info.get('sender', ''),
                         'date': email_info.get('date', ''),
@@ -1144,7 +1306,7 @@ class EmailDownloader:
                         'to_addrs': [],
                         'status': 'skipped',
                         'reason': reason
-                    })
+                    }))
                     failed_list.remove(email_info)
                     skipped_ids.add(email_id)
                     # 从失败列表中移除
@@ -1156,7 +1318,7 @@ class EmailDownloader:
                 if res:
                     res['status'] = 'success'
                     res['reason'] = f'重试{attempt}成功'
-                    results.append(res)
+                    results.append(_attach_ov(res))
                     failed_list.remove(email_info)
                     succeeded_ids.add(email_id)
                     # 更新失败列表
@@ -1264,6 +1426,15 @@ class EmailDownloader:
         project_root = Path(os.path.dirname(os.path.abspath(__file__))).resolve()
         duplicate_count = 0
 
+        # 合并内存中的别名（若报告生成时尚未写过别名行）
+        if self.oc_aliases and not existing_aliases_line:
+            groups = []
+            for main, subs in self.oc_aliases.items():
+                if subs:
+                    groups.append(main + "=" + "=".join(subs))
+            if groups:
+                existing_aliases_line = "oc_aliases\t" + ",".join(groups)
+
         for result in results:
             # 跳过失败的
             if result.get('status') == 'failed':
@@ -1312,6 +1483,16 @@ class EmailDownloader:
                     receiver_name = ""
             elif send_type == "收" and not receiver_name and only_oc_name:
                 receiver_name = only_oc_name
+
+            # 用户指定覆盖（未匹配手工入库，字段由 download_multiple 抄到 result）
+            if result.get('user_letter_type'):
+                letter_type = result['user_letter_type']
+            if result.get('user_sender_name'):
+                sender_name = result['user_sender_name']
+            if result.get('user_receiver_name'):
+                receiver_name = result['user_receiver_name']
+            if result.get('user_direction') in ("收", "发"):
+                send_type = result['user_direction']
 
             save_path = result.get('directory', '')
             try:
@@ -1403,95 +1584,50 @@ class EmailDownloader:
 
 
 class EmailDownloaderGUI:
+    MAIL_PRESETS = {
+        "QQ邮箱": "imap.qq.com",
+        "163邮箱": "imap.163.com",
+        "126邮箱": "imap.126.com",
+        "Gmail": "imap.gmail.com",
+        "Outlook": "outlook.office365.com",
+        "其他": "",
+    }
 
     def __init__(self, root):
         self.root = root
+        apply_app_window_icon(self.root)
 
-        # ✅ 先设置标题栏和任务栏图标（必须在窗口显示前）
-        try:
-            icon_dir = script_dir / "icon"
-            ico_path = icon_dir / "CrackPost.ico"
-            png_path = icon_dir / "CrackPost_v1.png"
-
-            # Windows 任务栏和标题栏图标
-            if ico_path.exists() and sys.platform.startswith("win"):
-                # 如果窗口已经显示过，可以先隐藏再显示，确保任务栏更新
-                self.root.withdraw()
-                self.root.iconbitmap(str(ico_path))
-                self.root.deiconify()
-
-            # 跨平台小图标
-            if png_path.exists():
-                pil_img = Image.open(str(png_path)).convert("RGBA")
-                small = pil_img.resize((32, 32), Image.LANCZOS)
-                self._app_icon_small = ImageTk.PhotoImage(small)
-                try:
-                    self.root.iconphoto(True, self._app_icon_small)
-                except Exception:
-                    pass
-
-                # 大图用于界面显示
-                large = pil_img.resize((64, 64), Image.LANCZOS)
-                self._app_icon_large = ImageTk.PhotoImage(large)
-
-        except Exception as e:
-            print(f"图标设置失败: {e}")
-
-        # 设置窗口标题和大小
         self.root.title("地缝邮件下载工具")
-        self.root.geometry("800x915")
-        self.root.minsize(800, 915)
+        self.root.geometry("720x640")
+        self.root.minsize(560, 480)
 
-        # 创建下载器实例
         self.downloader = EmailDownloader()
+        self.selected_folder = ""
+        self.matched_results = []
+        self.unmatched_results = []
+        self.manual_queue = []  # 用户从「未匹配」补录进来的信
+        self.busy = False
+        self.oc_edit_index = None
 
-        # 创建主界面
         self.create_widgets()
-
-        # 检查配置并初始化
         self.initialize_app()
 
-    
-# --- 注册OC函数修复 ---
-    def register_oc(self):
-        val = self.oc_input_var.get().strip()
-        if val:
-            # 只注册不重复的OC
-            if val not in self.downloader.oc_registerdata:
-                self.downloader.oc_registerdata.append(val)
-            # 立即写入 global_result.tsv 的 oc_registerdata 字段
-            global_result_path = self.downloader.base_dir / "global_result.tsv"
-            if os.path.exists(global_result_path):
-                with open(global_result_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                if lines and lines[0].startswith("oc_registerdata"):
-                    # 更新第一行
-                    oc_line = lines[0].strip().split('\t')
-                    all_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()] if len(oc_line) > 1 else [])
-                    all_oc.update(self.downloader.oc_registerdata)
-                    new_oc_line = f"oc_registerdata\t{','.join(sorted(all_oc))}\n"
-                    lines[0] = new_oc_line
-                    with open(global_result_path, "w", encoding="utf-8") as f:
-                        f.writelines(lines)
-            messagebox.showinfo("注册成功", f"已注册: {val}")
-            self.oc_input_var.set("")
-
-# --- 智能猜测收件人特殊处理A/B/C信 ---
-    def smart_guess_receivers(self):
-        """智能猜测收件人并补全global_result.tsv（带详细日志和弹窗提示）"""
-        import re
-
+    # ---------- 智能猜测（入库后自动调用；notify=False 不弹窗）----------
+    def smart_guess_receivers(self, notify=True):
         global_result_path = self.downloader.base_dir / "global_result.tsv"
         if not global_result_path.exists():
-            messagebox.showerror("错误", "未找到 global_result.tsv")
-            return
+            msg = "还没有邮件记录，无法识别收件人。"
+            if notify:
+                messagebox.showerror("错误", "未找到 global_result.tsv")
+            return msg
 
-        # 读取OC名单和注册日期
         with open(global_result_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         if not lines or not lines[0].startswith("oc_registerdata"):
-            messagebox.showerror("错误", "global_result.tsv 格式错误")
-            return
+            msg = "邮件记录格式不对，无法识别收件人。"
+            if notify:
+                messagebox.showerror("错误", "global_result.tsv 格式错误")
+            return msg
 
         oc_line = lines[0].strip().split('\t')
         oc_names = []
@@ -1504,1382 +1640,1444 @@ class EmailDownloaderGUI:
                         oc_names.append(parts[0])
                         oc_date_map[parts[0]] = parts[1]
 
-        # 判断是否只有一个 OC
+        # 主名 → 别名列表；正文匹配时别名也算到主名上
+        aliases_by_main = {oc: list(self.downloader.oc_aliases.get(oc, [])) for oc in oc_names}
+        data_start = 1
+        for i, line in enumerate(lines):
+            if line.startswith("oc_aliases"):
+                cols = line.strip().split('\t')
+                if len(cols) > 1 and cols[1]:
+                    for group in cols[1].split(','):
+                        parts = [p.strip() for p in group.split('=') if p.strip()]
+                        if len(parts) > 1 and parts[0] in aliases_by_main:
+                            merged = list(aliases_by_main[parts[0]])
+                            for a in parts[1:]:
+                                if a not in merged:
+                                    merged.append(a)
+                            aliases_by_main[parts[0]] = merged
+            elif line.startswith("收/发类型") or line.startswith("收/发"):
+                data_start = i
+                break
+
         only_one_oc = len(oc_names) == 1
         only_oc_name = oc_names[0] if only_one_oc else None
 
+        def _count_oc_in_text(content_text):
+            """主名与别名都计入该角色；较长的名字优先匹配，减少短名误伤。"""
+            oc_count = {oc: 0 for oc in oc_names}
+            remaining = content_text
+            # 按名字长度降序替换计数，避免「甲」吃掉「甲二」之类
+            tokens = []
+            for oc in oc_names:
+                tokens.append((oc, oc))
+                for alias in aliases_by_main.get(oc, []):
+                    tokens.append((oc, alias))
+            tokens.sort(key=lambda t: len(t[1]), reverse=True)
+            for main, token in tokens:
+                if not token:
+                    continue
+                n = remaining.count(token)
+                if n:
+                    oc_count[main] += n
+                    remaining = remaining.replace(token, "\0" * len(token))
+            return oc_count
+
         changed = 0
+        already_had = 0
+        empty_inbound = 0
         context_logs = []
-        new_lines = lines[:2]
+        new_lines = lines[: data_start + 1]
         oc_guess_count = {oc: 0 for oc in oc_names}
         unguessed_count = 0
 
-        for idx, row in enumerate(lines[2:]):
+        for idx, row in enumerate(lines[data_start + 1:]):
             cols = row.strip().split('\t')
             if len(cols) < 6:
                 new_lines.append(row)
                 continue
-            
+
             send_type = cols[0]
             subject = cols[4]
             send_date = cols[1]
             receiver = cols[3]
             directory = cols[5]
-            
-            # 只处理收信 且 收件人为空
-            if send_type == "收" and not receiver:
-                # 1. 只有一个 OC：直接填
-                if only_one_oc:
-                    cols[3] = only_oc_name
-                    changed += 1
-                    oc_guess_count[only_oc_name] += 1
-                    context_logs.append(
-                        f"[单OC自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)}"
-                    )
-                
-                # 2. 多个 OC
+
+            if send_type == "收":
+                if receiver:
+                    already_had += 1
                 else:
-                    # A 信
-                    if subject.startswith("A") or subject.startswith("a"):
+                    empty_inbound += 1
+                    if only_one_oc:
+                        cols[3] = only_oc_name
+                        changed += 1
+                        oc_guess_count[only_oc_name] += 1
+                        context_logs.append(f"[单OC] 行{data_start + idx + 2} → {only_oc_name}")
+                    elif subject.startswith("A") or subject.startswith("a") or subject.startswith("B") or subject.startswith("b"):
                         oc_to_fill = []
                         for oc in oc_names:
                             reg_date = oc_date_map.get(oc, "")
                             try:
                                 if reg_date and send_date and reg_date <= send_date:
                                     oc_to_fill.append(oc)
-                            except:
+                            except Exception:
                                 pass
                         if oc_to_fill:
                             cols[3] = ",".join(oc_to_fill)
                             changed += 1
                             for oc in oc_to_fill:
                                 oc_guess_count[oc] += 1
-                            context_logs.append(
-                                f"[A信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)}"
-                            )
+                            context_logs.append(f"[A/B] 行{data_start + idx + 2} → {cols[3]}")
                         else:
                             unguessed_count += 1
-                            context_logs.append(
-                                f"[A信无可补全] 行号{idx+3} 原:{row.strip()} 注册日期无符合条件的OC"
-                            )
-                    
-                    # B 信：同A信，补全为所有符合注册日期的OC
-                    elif subject.startswith("B") or subject.startswith("b"):
-                        oc_to_fill = []
-                        for oc in oc_names:
-                            reg_date = oc_date_map.get(oc, "")
-                            try:
-                                if reg_date and send_date and reg_date <= send_date:
-                                    oc_to_fill.append(oc)
-                            except:
-                                pass
-                        if oc_to_fill:
-                            cols[3] = ",".join(oc_to_fill)
-                            changed += 1
-                            for oc in oc_to_fill:
-                                oc_guess_count[oc] += 1
-                            context_logs.append(
-                                f"[B信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)}"
-                            )
-                        else:
-                            unguessed_count += 1
-                            context_logs.append(
-                                f"[B信无可补全] 行号{idx+3} 原:{row.strip()} 注册日期无符合条件的OC"
-                            )
-                    
-                    # C 信或 A+C 信：从 content.txt 提取
                     elif subject.startswith("C") or subject.startswith("A+C"):
-                        # 构建 content.txt 路径
-                        project_root = Path(os.path.dirname(os.path.abspath(__file__))).resolve()
-                        # directory 格式如 .\email\收\20220910_FW_C_2341_来自尹浦的信
-                        if directory.startswith('.\\'):
-                            rel_path = directory[2:]
-                        else:
-                            rel_path = directory
+                        project_root = script_dir.resolve()
+                        rel_path = directory[2:] if directory.startswith('.\\') else directory
                         content_path = project_root / rel_path.replace('\\', os.sep) / "content.txt"
-                        
                         if content_path.exists():
                             try:
-                                with open(content_path, "r", encoding="utf-8") as cf:
-                                    content_text = cf.read()
-                                
-                                # 统计每个 OC 名称出现次数
-                                oc_count = {oc: content_text.count(oc) for oc in oc_names}
-                                
-                                # 优先规则：如果只有一个 OC 出现（count>0），其它 OC 都为0，则直接选它（即便出现多次）
-                                nonzero_ocs = [oc for oc, count in oc_count.items() if count > 0]
-                                if len(nonzero_ocs) == 1:
-                                    chosen = nonzero_ocs[0]
+                                content_text = content_path.read_text(encoding="utf-8")
+                                oc_count = _count_oc_in_text(content_text)
+                                nonzero = [oc for oc, c in oc_count.items() if c > 0]
+                                unique = [oc for oc, c in oc_count.items() if c == 1]
+                                chosen = None
+                                if len(nonzero) == 1:
+                                    chosen = nonzero[0]
+                                elif len(unique) == 1:
+                                    chosen = unique[0]
+                                if chosen:
                                     cols[3] = chosen
                                     changed += 1
                                     oc_guess_count[chosen] += 1
                                     context_logs.append(
-                                        f"[C信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)} (从content.txt提取: {chosen})"
+                                        f"[C] 行{data_start + idx + 2} → {chosen}（含别名匹配）"
                                     )
                                 else:
-                                    # 次级规则：如果有且仅有某个 OC 出现 1 次，则选它
-                                    unique_ocs = [oc for oc, count in oc_count.items() if count == 1]
-                                    if len(unique_ocs) == 1:
-                                        cols[3] = unique_ocs[0]
-                                        changed += 1
-                                        oc_guess_count[unique_ocs[0]] += 1
-                                        context_logs.append(
-                                            f"[C信自动补全] 行号{idx+3} 原:{row.strip()}\n→ 新:{'\t'.join(cols)} (从content.txt提取: {unique_ocs[0]})"
-                                        )
-                                    else:
-                                        unguessed_count += 1
-                                        detail = f"各OC出现次数: {oc_count}"
-                                        context_logs.append(
-                                            f"[C信无法猜测] 行号{idx+3} 原:{row.strip()} content.txt中未找到唯一OC ({detail})"
-                                        )
-                            except Exception as e:
+                                    unguessed_count += 1
+                            except Exception:
                                 unguessed_count += 1
-                                context_logs.append(
-                                    f"[C信读取失败] 行号{idx+3} 原:{row.strip()} 错误:{e}"
-                                )
                         else:
                             unguessed_count += 1
-                            context_logs.append(
-                                f"[C信无content.txt] 行号{idx+3} 原:{row.strip()} 路径:{content_path}"
-                            )
-                    
-                    # 其他类型
                     else:
                         unguessed_count += 1
-                        context_logs.append(
-                            f"[未处理类型] 行号{idx+3} 原:{row.strip()} subject:{subject}"
-                        )
-            
+
             new_lines.append('\t'.join(cols) + '\n')
 
-        # 写入文件
         with open(global_result_path, "w", encoding="utf-8") as f:
             for line in new_lines:
                 f.write(line if line.endswith('\n') else line + '\n')
 
-        log_text = f"已补全 {changed} 封邮件的收件人\n\n" + "\n".join(context_logs)
-        self.add_download_log(log_text)
+        if empty_inbound == 0:
+            summary = (
+                f"收件人：没有需要补全的空缺"
+                f"（已检查 {already_had} 封收信，收件人栏都已有值；"
+            )
+        elif changed == 0 and unguessed_count == 0:
+            summary = "收件人：没有改动。"
+        else:
+            detail = "\n".join([f"{oc}：补全 {oc_guess_count[oc]} 封" for oc in oc_names])
+            summary = (
+                f"收件人：在 {empty_inbound} 封空缺里补全了 {changed} 封"
+                + (f"。\n{detail}" if detail else "")
+                + (f"\n还有 {unguessed_count} 封空着、认不出来，可到「库存」里手工改。" if unguessed_count else "。")
+            )
+        log_text = summary + "\n" + "\n".join(context_logs)
+        self.add_work_log(log_text)
+        if notify:
+            messagebox.showinfo("智能猜测完成", summary)
+        return summary
 
-        # 前台弹窗提示
-        detail = "\n".join([f"{oc}: {oc_guess_count[oc]} 封" for oc in oc_names])
-        messagebox.showinfo(
-            "智能猜测完成",
-            f"自动补全结果：\n{detail}\n还有 {unguessed_count} 封无法被猜测。\n\n详细见下载日志区"
+    # ---------- 壳 ----------
+    def create_widgets(self):
+        main = ttk.Frame(self.root, padding="10")
+        main.pack(fill=tk.BOTH, expand=True)
+
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.login_frame = ttk.Frame(self.notebook, padding="8")
+        self.import_frame = ttk.Frame(self.notebook, padding="8")
+        self.inventory_frame = ttk.Frame(self.notebook, padding="8")
+        self.advanced_frame = ttk.Frame(self.notebook, padding="8")
+        self.notebook.add(self.login_frame, text="登录")
+        self.notebook.add(self.import_frame, text="检索入库")
+        self.notebook.add(self.inventory_frame, text="信件库存")
+        self.notebook.add(self.advanced_frame, text="高级设置")
+
+        self._init_vars()
+        self._build_login_tab()
+        self._build_import_tab()
+        self._build_inventory_tab()
+        self._build_advanced_tab()
+
+        status = ttk.Frame(self.root, relief=tk.SUNKEN, padding=(2, 2))
+        status.pack(fill=tk.X, side=tk.BOTTOM)
+        self.status_var = tk.StringVar(value="就绪")
+        ttk.Label(status, textvariable=self.status_var, anchor=tk.W).pack(side=tk.LEFT, fill=tk.X)
+        ttk.Label(status, text="v1.3", anchor=tk.E).pack(side=tk.RIGHT)
+
+    def _init_vars(self):
+        self.email_var = tk.StringVar(value=self.downloader.email_addr)
+        self.password_var = tk.StringVar(value=self.downloader.password)
+        self.server_var = tk.StringVar(value=self.downloader.imap_server)
+        preset = "其他"
+        for name, host in self.MAIL_PRESETS.items():
+            if host and host == self.downloader.imap_server:
+                preset = name
+                break
+        self.mailbox_type_var = tk.StringVar(value=preset)
+
+        # 默认始终为程序所在目录（开发=项目根，打包=exe 同级）
+        default_root = script_dir.resolve()
+        default_email = default_root / "email"
+        self.root_dir_var = tk.StringVar(value=str(default_root))
+        self.downloader.base_dir = default_email
+
+        stored = self.downloader.config.get("Storage", "base_directory", fallback="")
+        if stored:
+            stored_path = Path(stored).expanduser()
+            # 旧版错误默认：~/email；视为无效，继续用程序目录
+            legacy_home = (Path.home() / "email").resolve()
+            try:
+                is_legacy = stored_path.resolve() == legacy_home
+            except Exception:
+                is_legacy = False
+            if not is_legacy and stored_path.name.lower() == "email":
+                self.root_dir_var.set(str(stored_path.parent.resolve()))
+                self.downloader.base_dir = stored_path
+            elif not is_legacy and stored_path.name.lower() != "email":
+                # 配置里直接写了根目录时也兼容
+                self.root_dir_var.set(str(stored_path.resolve()))
+                self.downloader.base_dir = stored_path / "email"
+        self.timeout_var = tk.StringVar(value=str(self.downloader.timeout))
+        self.batch_var = tk.StringVar(value=str(self.downloader.batch_size))
+        self.imap_port_var = tk.StringVar(value=str(getattr(self.downloader, "imap_port", 993)))
+
+        rule1 = self.downloader.get_default_rule(1)
+        rule2 = self.downloader.get_default_rule(2)
+        self.adv_rule1_from = tk.StringVar(value=rule1.get("from", ""))
+        self.adv_rule1_to = tk.StringVar(value=rule1.get("to", "") or self.downloader.email_addr)
+        self.adv_rule1_subject = tk.StringVar(value=rule1.get("subject_pattern", ""))
+        self.adv_rule2_from = tk.StringVar(value=rule2.get("from", "") or self.downloader.email_addr)
+        self.adv_rule2_to = tk.StringVar(value=rule2.get("to", ""))
+        self.adv_rule2_subject = tk.StringVar(value=rule2.get("subject_pattern", ""))
+
+        self.oc_name_var = tk.StringVar()
+        self.oc_date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        self.alias_input_var = tk.StringVar()
+        self.folder_var = tk.StringVar()
+        self.start_date_var = tk.StringVar()
+        self.end_date_var = tk.StringVar()
+        self.work_status_var = tk.StringVar(value="登录后，在这里登记角色并拉取来往信件。")
+        self.summary_var = tk.StringVar(value="")
+        self.inv_filter_var = tk.StringVar()
+
+    def _scrollable(self, parent):
+        holder = ttk.Frame(parent)
+        holder.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0)
+        vsb = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, padding=(2, 2))
+        iid = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def on_inner(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas(event):
+            canvas.itemconfigure(iid, width=event.width)
+
+        inner.bind("<Configure>", on_inner)
+        canvas.bind("<Configure>", on_canvas)
+        canvas.configure(yscrollcommand=vsb.set)
+
+        def wheel(event):
+            w = event.widget
+            try:
+                cls = w.winfo_class()
+            except Exception:
+                cls = ""
+            # 这些控件自己处理滚轮，不要滚外层
+            if cls in ("Text", "Listbox", "Treeview"):
+                return
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+            return "break"
+
+        def _wheel_enter(_event=None):
+            holder.unbind_all("<MouseWheel>")
+            holder.bind_all("<MouseWheel>", wheel)
+
+        def _wheel_leave(event=None):
+            # 鼠标仍在 holder 内（含嵌入区子控件）时不解绑
+            if event is not None:
+                try:
+                    x, y = holder.winfo_pointerxy()
+                    w = holder.winfo_containing(x, y)
+                    if w is not None:
+                        cur = w
+                        while cur:
+                            if cur == holder:
+                                return
+                            cur = cur.master
+                except Exception:
+                    pass
+            holder.unbind_all("<MouseWheel>")
+
+        holder.bind("<Enter>", _wheel_enter)
+        holder.bind("<Leave>", _wheel_leave)
+        canvas.bind("<MouseWheel>", wheel)
+        inner.bind("<MouseWheel>", wheel)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        return inner
+
+    def _make_date_row(self, parent, textvariable, width=12):
+        """输入框 + 日历按钮（弹独立窗口，避免 DateEntry 在滚动区一点就关）。"""
+        row = ttk.Frame(parent)
+        ttk.Entry(row, textvariable=textvariable, width=width).pack(side=tk.LEFT)
+        ttk.Button(row, text="日历", width=4, command=lambda: self._pick_date_dialog(textvariable)).pack(
+            side=tk.LEFT, padx=4
+        )
+        return row
+
+    def _pick_date_dialog(self, textvariable):
+        top = tk.Toplevel(self.root)
+        top.title("选择日期")
+        top.transient(self.root)
+        top.resizable(False, False)
+        try:
+            top.grab_set()
+        except Exception:
+            pass
+        cal_kw = {"selectmode": "day", "date_pattern": "yyyy-mm-dd"}
+        raw = (textvariable.get() or "").strip()
+        if raw:
+            try:
+                d = datetime.strptime(raw, "%Y-%m-%d")
+                cal_kw.update(year=d.year, month=d.month, day=d.day)
+            except Exception:
+                pass
+        cal = Calendar(top, **cal_kw)
+        cal.pack(padx=10, pady=10)
+
+        def confirm():
+            textvariable.set(cal.get_date())
+            top.destroy()
+
+        bar = ttk.Frame(top)
+        bar.pack(pady=(0, 10))
+        ttk.Button(bar, text="确定", command=confirm).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bar, text="取消", command=top.destroy).pack(side=tk.LEFT)
+        top.wait_window()
+
+    def initialize_app(self):
+        self.load_oc_from_tsv()
+        self.refresh_inventory()
+        if self.downloader.email_addr and self.downloader.password and self.downloader.imap_server:
+            self.status_var.set("已填入上次的邮箱，确认授权码后可以登录")
+
+    # ==================== 登录 ====================
+    def _build_login_tab(self):
+        inner = self._scrollable(self.login_frame)
+
+        guide = ttk.LabelFrame(inner, text="如何获取 IMAP 授权码", padding=(10, 8))
+        guide.pack(fill=tk.X, pady=4)
+        guide_text = (
+            "1. 打开你的邮箱网页版 → 设置，搜索「IMAP」或「授权码」。\n"
+            "2. 开启 IMAP 服务，按提示用短信等方式生成授权码（为了信息安全，请不尽量避免暴露授权码！）。\n"
+            "3. 如果授权码有日期限制，请选「全部」，否则授权码到期后需要重复上述操作。\n"
+            "4. 把邮箱地址和授权码填到下面，选好邮箱类型，点「登录」。"
+        )
+        ttk.Label(guide, text=guide_text, justify=tk.LEFT, wraplength=500).pack(anchor=tk.W)
+
+        help_frame = ttk.LabelFrame(inner, text="帮助", padding=(10, 8))
+        help_frame.pack(fill=tk.X, pady=4)
+        help_text = LOGIN_EXTRA_HELP.strip() or LOGIN_HELP_DEFAULT
+        ttk.Label(help_frame, text=help_text, justify=tk.LEFT, wraplength=500).pack(anchor=tk.W)
+
+        form = ttk.LabelFrame(inner, text="登录", padding=(10, 8))
+        form.pack(fill=tk.X, pady=8)
+        form.columnconfigure(1, weight=1)
+
+        ttk.Label(form, text="邮箱地址").grid(row=0, column=0, sticky=tk.W, pady=6, padx=(0, 8))
+        ttk.Entry(form, textvariable=self.email_var).grid(row=0, column=1, sticky=tk.EW, pady=6)
+
+        ttk.Label(form, text="授权码").grid(row=1, column=0, sticky=tk.W, pady=6, padx=(0, 8))
+        ttk.Entry(form, textvariable=self.password_var, show="*").grid(row=1, column=1, sticky=tk.EW, pady=6)
+
+        ttk.Label(form, text="邮箱类型").grid(row=2, column=0, sticky=tk.W, pady=6, padx=(0, 8))
+        self.mailbox_combo = ttk.Combobox(
+            form, textvariable=self.mailbox_type_var,
+            values=list(self.MAIL_PRESETS.keys()), state="readonly"
+        )
+        self.mailbox_combo.grid(row=2, column=1, sticky=tk.EW, pady=6)
+        self.mailbox_combo.bind("<<ComboboxSelected>>", self._on_mailbox_type)
+
+        self.server_row = ttk.Frame(form)
+        ttk.Label(self.server_row, text="IMAP 服务器").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Entry(self.server_row, textvariable=self.server_var, width=36).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._on_mailbox_type()
+
+        footer = ttk.Frame(self.login_frame)
+        footer.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(footer, text="登录", command=self.do_login).pack(side=tk.RIGHT)
+
+    def _on_mailbox_type(self, _event=None):
+        name = self.mailbox_type_var.get()
+        host = self.MAIL_PRESETS.get(name, "")
+        if host:
+            self.server_var.set(host)
+            self.server_row.grid_remove()
+        else:
+            self.server_row.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=6)
+
+    def do_login(self):
+        if not self.email_var.get().strip() or not self.password_var.get():
+            messagebox.showwarning("提示", "请填写邮箱地址和授权码。")
+            return
+        self._on_mailbox_type()
+        if not self.server_var.get().strip():
+            messagebox.showwarning("提示", "请选择邮箱类型，或在「其他」里填写 IMAP 服务器。")
+            return
+        self.downloader.email_addr = self.email_var.get().strip()
+        self.downloader.password = self.password_var.get()
+        self.downloader.imap_server = self.server_var.get().strip()
+        try:
+            self.downloader.timeout = int(self.timeout_var.get())
+            self.downloader.batch_size = int(self.batch_var.get())
+            self.downloader.imap_port = int(self.imap_port_var.get())
+            root_path = Path(self.root_dir_var.get())
+            root_path.mkdir(parents=True, exist_ok=True)
+            self.downloader.base_dir = root_path / "email"
+            self.downloader.base_dir.mkdir(parents=True, exist_ok=True)
+            self.downloader.save_config()
+        except Exception as e:
+            messagebox.showerror("错误", f"保存设置失败: {e}")
+            return
+        self.status_var.set("正在登录…")
+        self.root.update()
+        if not self.downloader.connect_to_email():
+            messagebox.showerror("错误", "登录失败，请检查邮箱、授权码和邮箱类型。")
+            self.status_var.set("登录失败")
+            return
+        folders = self.downloader.get_all_mailboxes()
+        if folders:
+            self.folder_combo["values"] = folders
+            preferred = "INBOX" if "INBOX" in folders else folders[0]
+            self.folder_var.set(preferred)
+            self.selected_folder = preferred
+        else:
+            messagebox.showerror("错误", "登录成功，但没有找到收件箱。")
+            return
+        self.status_var.set(f"已登录，默认文件夹 {self.selected_folder}")
+        self.notebook.select(self.import_frame)
+
+    # ==================== 检索入库（子页：OC 管理 / 信件下载）====================
+    def _build_import_tab(self):
+        self.import_notebook = ttk.Notebook(self.import_frame)
+        self.import_notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.oc_page = ttk.Frame(self.import_notebook, padding="4")
+        self.download_page = ttk.Frame(self.import_notebook, padding="4")
+        self.import_notebook.add(self.oc_page, text="OC 管理")
+        self.import_notebook.add(self.download_page, text="信件下载")
+
+        self._build_oc_page()
+        self._build_download_page()
+
+    def _build_oc_page(self):
+        inner = self._scrollable(self.oc_page)
+
+        oc_box = ttk.LabelFrame(inner, text="角色（OC）", padding=(8, 6))
+        oc_box.pack(fill=tk.BOTH, expand=True, pady=4)
+        ttk.Label(
+            oc_box,
+            text="登记你的OC名和OC第一次使用地缝的日期。如果一个OC有多个称呼[别名]，请在此注册",
+            wraplength=500,
+        ).pack(anchor=tk.W, pady=(0, 4))
+
+        cols = ("名字", "首次使用日期", "别名")
+        self.oc_tree = ttk.Treeview(oc_box, columns=cols, show="headings", height=8, selectmode="browse")
+        for c, w in zip(cols, (120, 120, 240)):
+            self.oc_tree.heading(c, text=c)
+            self.oc_tree.column(c, width=w)
+        self.oc_tree.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.oc_tree.bind("<<TreeviewSelect>>", self._on_oc_select)
+
+        form = ttk.Frame(oc_box)
+        form.pack(fill=tk.X, pady=4)
+        ttk.Label(form, text="名字").grid(row=0, column=0, sticky=tk.W, padx=(0, 4))
+        ttk.Entry(form, textvariable=self.oc_name_var, width=16).grid(row=0, column=1, padx=4)
+        ttk.Label(form, text="日期").grid(row=0, column=2, sticky=tk.W, padx=(8, 4))
+        self._make_date_row(form, self.oc_date_var, width=12).grid(row=0, column=3, padx=4, sticky=tk.W)
+
+        alias_box = ttk.LabelFrame(oc_box, text="别名", padding=(6, 4))
+        alias_box.pack(fill=tk.X, pady=4)
+        alias_row = ttk.Frame(alias_box)
+        alias_row.pack(fill=tk.X)
+        ttk.Entry(alias_row, textvariable=self.alias_input_var, width=24).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(alias_row, text="添加别名", command=self.add_alias_item).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(alias_row, text="删除所选别名", command=self.remove_alias_item).pack(side=tk.LEFT)
+        self.alias_listbox = tk.Listbox(alias_box, height=4, exportselection=False)
+        self.alias_listbox.pack(fill=tk.X, pady=4)
+
+        btns = ttk.Frame(oc_box)
+        btns.pack(fill=tk.X, pady=2)
+        ttk.Button(btns, text="添加 / 更新角色", command=self.save_oc_row).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btns, text="删除所选角色", command=self.delete_oc_row).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btns, text="清空表单", command=self.clear_oc_form).pack(side=tk.LEFT)
+
+        foot = ttk.Frame(self.oc_page)
+        foot.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(foot, text="下一步：信件下载", command=self._goto_download_page).pack(side=tk.RIGHT)
+
+    def _build_download_page(self):
+        inner = self._scrollable(self.download_page)
+
+        pull = ttk.LabelFrame(inner, text="拉取来往信件", padding=(8, 6))
+        pull.pack(fill=tk.X, pady=6)
+        ttk.Label(
+            pull,
+            text="在选定邮箱文件夹里搜与地缝的来往信。默认收件箱；若找不到信件，请确保文件夹正确。",
+            wraplength=500,
+        ).pack(anchor=tk.W)
+        fr = ttk.Frame(pull)
+        fr.pack(fill=tk.X, pady=4)
+        ttk.Label(fr, text="邮箱文件夹").pack(side=tk.LEFT)
+        self.folder_combo = ttk.Combobox(fr, textvariable=self.folder_var, width=36, state="readonly")
+        self.folder_combo.pack(side=tk.LEFT, padx=6)
+        dr = ttk.Frame(pull)
+        dr.pack(fill=tk.X, pady=6)
+        ttk.Label(dr, text="起始").pack(side=tk.LEFT)
+        self._make_date_row(dr, self.start_date_var, width=12).pack(side=tk.LEFT, padx=6)
+        ttk.Label(dr, text="结束").pack(side=tk.LEFT, padx=(8, 0))
+        self._make_date_row(dr, self.end_date_var, width=12).pack(side=tk.LEFT, padx=6)
+        ttk.Button(dr, text="开始拉取", command=self.start_fetch).pack(side=tk.RIGHT)
+
+        ttk.Label(pull, textvariable=self.work_status_var, wraplength=500).pack(anchor=tk.W, pady=2)
+        self.work_progress = ttk.Progressbar(pull, orient=tk.HORIZONTAL, mode="determinate")
+        self.work_progress.pack(fill=tk.X, pady=4)
+
+        res_box = ttk.LabelFrame(inner, text="将要被下载的来往信件", padding=(6, 6))
+        res_box.pack(fill=tk.X, pady=4)
+        mcols = ("方向", "日期", "发件邮箱", "主题")
+        self.match_tree = ttk.Treeview(res_box, columns=mcols, show="headings", height=8, selectmode="extended")
+        for c, w in zip(mcols, (50, 130, 180, 280)):
+            self.match_tree.heading(c, text=c)
+            self.match_tree.column(c, width=w)
+        self.match_tree.pack(fill=tk.X)
+
+        act = ttk.Frame(res_box)
+        act.pack(fill=tk.X, pady=6)
+        ttk.Button(act, text="处理主题不合规的信…", command=self.open_unmatched_dialog).pack(side=tk.LEFT)
+        ttk.Button(act, text="下载入库并打开[地缝可视化]", command=self.start_download_pipeline).pack(side=tk.RIGHT)
+
+        sum_box = ttk.LabelFrame(inner, text="结果摘要", padding=(8, 6))
+        sum_box.pack(fill=tk.X, pady=4)
+        ttk.Label(sum_box, textvariable=self.summary_var, wraplength=500, justify=tk.LEFT).pack(anchor=tk.W)
+
+        log_box = ttk.LabelFrame(inner, text="详细记录", padding=(6, 6))
+        log_box.pack(fill=tk.X, pady=4)
+        self.work_log = scrolledtext.ScrolledText(log_box, wrap=tk.WORD, height=8)
+        self.work_log.pack(fill=tk.BOTH, expand=True)
+        self.work_log.configure(state="disabled")
+
+        foot = ttk.Frame(self.download_page)
+        foot.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(foot, text="打开日志文件夹", command=self.open_log_folder).pack(side=tk.LEFT)
+        ttk.Button(foot, text="查看下载报告", command=self.view_download_report).pack(side=tk.LEFT, padx=6)
+        ttk.Button(foot, text="再次打开[地缝可视化]", command=self.open_visualization_html).pack(side=tk.RIGHT)
+
+    def _goto_download_page(self):
+        self.import_notebook.select(self.download_page)
+
+    # ----- OC helpers -----
+    def load_oc_from_tsv(self):
+        path = self.downloader.base_dir / "global_result.tsv"
+        self.downloader.oc_registerdata = []
+        self.downloader.oc_aliases = {}
+        if path.exists():
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                lines = []
+            for line in lines:
+                if line.startswith("oc_registerdata"):
+                    cols = line.split("\t")
+                    if len(cols) > 1 and cols[1]:
+                        self.downloader.oc_registerdata = [
+                            x.strip() for x in cols[1].split(",") if x.strip()
+                        ]
+                elif line.startswith("oc_aliases"):
+                    cols = line.split("\t")
+                    if len(cols) > 1 and cols[1]:
+                        for group in cols[1].split(","):
+                            parts = [p.strip() for p in group.split("=") if p.strip()]
+                            if len(parts) > 1:
+                                self.downloader.oc_aliases[parts[0]] = parts[1:]
+                elif line.startswith("收/发"):
+                    break
+        self.refresh_oc_tree()
+
+    def refresh_oc_tree(self):
+        for item in self.oc_tree.get_children():
+            self.oc_tree.delete(item)
+        for entry in self.downloader.oc_registerdata:
+            if "_" in entry:
+                name, date_str = entry.rsplit("_", 1)
+            else:
+                name, date_str = entry, ""
+            aliases = "，".join(self.downloader.oc_aliases.get(name, []))
+            self.oc_tree.insert("", tk.END, values=(name, date_str, aliases))
+
+    def _alias_list_get(self):
+        return [self.alias_listbox.get(i) for i in range(self.alias_listbox.size())]
+
+    def _alias_list_set(self, aliases):
+        self.alias_listbox.delete(0, tk.END)
+        for a in aliases or []:
+            if a:
+                self.alias_listbox.insert(tk.END, a)
+
+    def add_alias_item(self):
+        name = self.alias_input_var.get().strip()
+        if not name:
+            return
+        if name in self._alias_list_get():
+            self.alias_input_var.set("")
+            return
+        self.alias_listbox.insert(tk.END, name)
+        self.alias_input_var.set("")
+
+    def remove_alias_item(self):
+        sel = list(self.alias_listbox.curselection())
+        for i in reversed(sel):
+            self.alias_listbox.delete(i)
+
+    def _on_oc_select(self, _event=None):
+        sel = self.oc_tree.selection()
+        if not sel:
+            return
+        vals = self.oc_tree.item(sel[0], "values")
+        self.oc_edit_index = self.oc_tree.index(sel[0])
+        self.oc_name_var.set(vals[0])
+        self._alias_list_set(self.downloader.oc_aliases.get(vals[0], []))
+        self.alias_input_var.set("")
+        if vals[1]:
+            self.oc_date_var.set(vals[1])
+
+    def clear_oc_form(self):
+        self.oc_edit_index = None
+        self.oc_name_var.set("")
+        self.oc_date_var.set(datetime.now().strftime("%Y-%m-%d"))
+        self.alias_input_var.set("")
+        self._alias_list_set([])
+        self.oc_tree.selection_remove(self.oc_tree.selection())
+
+    def save_oc_row(self):
+        name = self.oc_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("提示", "请填写角色名字。")
+            return
+        if "_" in name:
+            messagebox.showwarning("提示", "角色名里不能有下划线。")
+            return
+        date_str = self.oc_date_var.get().strip()
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except Exception:
+            messagebox.showwarning("提示", "请填写或用日历选择日期（格式 YYYY-MM-DD）。")
+            return
+        # 若输入框里还有未点「添加」的别名，一并收下
+        pending = self.alias_input_var.get().strip()
+        if pending:
+            self.add_alias_item()
+        entry = f"{name}_{date_str}"
+        aliases = self._alias_list_get()
+
+        # 更新列表：同名覆盖
+        new_list = []
+        replaced = False
+        for old in self.downloader.oc_registerdata:
+            old_name = old.split("_")[0]
+            if old_name == name:
+                new_list.append(entry)
+                replaced = True
+            else:
+                new_list.append(old)
+        if not replaced:
+            if self.oc_edit_index is not None and 0 <= self.oc_edit_index < len(new_list):
+                old_entry = new_list[self.oc_edit_index]
+                old_name = old_entry.split("_")[0]
+                new_list[self.oc_edit_index] = entry
+                if old_name in self.downloader.oc_aliases and old_name != name:
+                    self.downloader.oc_aliases.pop(old_name, None)
+            else:
+                new_list.append(entry)
+        self.downloader.oc_registerdata = new_list
+        if aliases:
+            self.downloader.oc_aliases[name] = aliases
+        elif name in self.downloader.oc_aliases:
+            del self.downloader.oc_aliases[name]
+        self._persist_oc_header()
+        self.refresh_oc_tree()
+        self.clear_oc_form()
+        self.status_var.set(f"已保存角色 {name}")
+
+    def delete_oc_row(self):
+        sel = self.oc_tree.selection()
+        if not sel:
+            messagebox.showinfo("提示", "请先在列表里选一个角色。")
+            return
+        idx = self.oc_tree.index(sel[0])
+        if 0 <= idx < len(self.downloader.oc_registerdata):
+            entry = self.downloader.oc_registerdata.pop(idx)
+            name = entry.split("_")[0]
+            self.downloader.oc_aliases.pop(name, None)
+        self._persist_oc_header()
+        self.refresh_oc_tree()
+        self.clear_oc_form()
+
+    def _persist_oc_header(self):
+        path = self.downloader.base_dir / "global_result.tsv"
+        if not path.exists():
+            return
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        oc_line = "oc_registerdata\t" + ",".join(self.downloader.oc_registerdata) + "\n"
+        groups = []
+        for main, subs in self.downloader.oc_aliases.items():
+            if subs:
+                groups.append(main + "=" + "=".join(subs))
+        alias_line = ("oc_aliases\t" + ",".join(groups) + "\n") if groups else None
+
+        out = []
+        wrote_oc = False
+        wrote_alias = False
+        for line in lines:
+            if line.startswith("oc_registerdata"):
+                out.append(oc_line)
+                wrote_oc = True
+                if alias_line and not wrote_alias:
+                    out.append(alias_line)
+                    wrote_alias = True
+            elif line.startswith("oc_aliases"):
+                if alias_line and not wrote_alias:
+                    out.append(alias_line)
+                    wrote_alias = True
+                # 跳过旧别名行
+            else:
+                out.append(line)
+        if not wrote_oc:
+            out.insert(0, oc_line)
+            if alias_line:
+                out.insert(1, alias_line)
+        path.write_text("".join(out), encoding="utf-8")
+
+    # ----- 拉取 -----
+    def _parse_optional_date(self, var):
+        raw = var.get().strip() if hasattr(var, "get") else ""
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d")
+        except Exception:
+            return None
+
+    def start_fetch(self):
+        if self.busy:
+            return
+        if not self.downloader.client and not self.downloader.connect_to_email():
+            messagebox.showerror("错误", "请先在「登录」页登录。")
+            self.notebook.select(self.login_frame)
+            return
+        folder = (self.folder_var.get() or self.selected_folder or "").strip()
+        if not folder:
+            folders = self.downloader.get_all_mailboxes() or []
+            if folders:
+                self.folder_combo["values"] = folders
+                folder = "INBOX" if "INBOX" in folders else folders[0]
+                self.folder_var.set(folder)
+        if not folder:
+            messagebox.showerror("错误", "没有找到邮箱文件夹。")
+            return
+        self.selected_folder = folder
+        if not self.downloader.oc_registerdata:
+            if not messagebox.askyesno("提示", "还没有登记角色。仍要继续拉取吗？"):
+                return
+        self.busy = True
+        self.work_progress["value"] = 0
+        self.summary_var.set("")
+        self.clear_work_log()
+        for item in self.match_tree.get_children():
+            self.match_tree.delete(item)
+        self.work_status_var.set("正在检索往来信件…")
+        self.status_var.set("正在检索往来信件…")
+        self.matched_results = []
+        self.unmatched_results = []
+        self.manual_queue = []
+        threading.Thread(target=self._run_fetch, daemon=True).start()
+
+    def _run_fetch(self):
+        try:
+            folder = self.folder_var.get() or self.selected_folder
+            start_date = self._parse_optional_date(self.start_date_var)
+            end_date = self._parse_optional_date(self.end_date_var)
+            merged = []
+            seen = set()
+            unmatched_all = []
+            unmatched_seen = set()
+
+            for index, (rule_num, label) in enumerate(((1, "收到的信"), (2, "发出的信"))):
+                rule = self.downloader.get_default_rule(rule_num)
+                base = index * 50
+
+                def cb(progress, found, _base=base, _label=label):
+                    def _ui(p=progress, f=found, b=_base, lab=_label):
+                        # 检索中始终提示「正在检索」；有命中再附带数量，避免长时间显示「0 封」
+                        if f > 0:
+                            self.work_status_var.set(
+                                f"正在检索往来信件（{lab}）… 已找到 {f} 封"
+                            )
+                        else:
+                            self.work_status_var.set(f"正在检索往来信件（{lab}）…")
+                        self.status_var.set("正在检索往来信件…")
+                        self.work_progress["value"] = b + p * 0.5
+                    self.root.after(0, _ui)
+
+                self.root.after(
+                    0,
+                    lambda lab=label: self.work_status_var.set(
+                        f"正在检索往来信件（{lab}）…"
+                    ),
+                )
+
+                self.downloader.last_unmatched = []
+                results = self.downloader.search_emails_advanced(
+                    folder=folder,
+                    subject_pattern=rule.get("subject_pattern", ""),
+                    from_address=rule.get("from", ""),
+                    to_address=rule.get("to", ""),
+                    start_date=start_date,
+                    end_date=end_date,
+                    callback=cb,
+                    max_emails=1500,
+                )
+                for email_info in results:
+                    eid = email_info.get("id")
+                    if eid not in seen:
+                        seen.add(eid)
+                        direction = self.downloader.direction_from_addresses(
+                            email_info.get("sender", ""),
+                            email_info.get("recipients") or [],
+                        )
+                        # 规则1收、规则2发；再以地址方向覆盖
+                        if rule_num == 1:
+                            direction = "收"
+                        elif rule_num == 2:
+                            direction = "发"
+                        email_info["direction"] = direction
+                        merged.append(email_info)
+                for item in getattr(self.downloader, "last_unmatched", []) or []:
+                    eid = item.get("id")
+                    if eid not in unmatched_seen and eid not in seen:
+                        unmatched_seen.add(eid)
+                        unmatched_all.append(item)
+
+                # 每一轮规则结束后先刷新列表，避免整段检索期间一直空白
+                snap = list(merged)
+
+                def _mid_refresh(s=snap, lab=label, n=len(snap), last=(index == 1)):
+                    self.matched_results = s
+                    self._fill_match_tree()
+                    if last:
+                        self.work_status_var.set("正在检索往来信件… 汇总中")
+                    else:
+                        self.work_status_var.set(
+                            f"正在检索往来信件…（{lab}已纳入 {n} 封，继续检索中）"
+                        )
+
+                self.root.after(0, _mid_refresh)
+
+            self.matched_results = merged
+            self.unmatched_results = unmatched_all
+            self.downloader.search_results = list(merged)
+
+            def done():
+                self._fill_match_tree()
+                self.work_progress["value"] = 100
+                self.work_status_var.set(
+                    f"找到 {len(merged)} 封合规来往信；另有 {len(unmatched_all)} 封主题不合规。"
+                )
+                self.status_var.set(
+                    f"检索完成：{len(merged)} 封合规 / {len(unmatched_all)} 封待处理"
+                )
+                self.add_work_log(
+                    f"拉取完成：匹配 {len(merged)}，未匹配 {len(unmatched_all)}\n"
+                )
+                if unmatched_all:
+                    if messagebox.askyesno(
+                        "主题不合规",
+                        f"有 {len(unmatched_all)} 封来往信主题不符合命名规则。\n是否现在手工指定为 A/B/C 信？",
+                    ):
+                        self.open_unmatched_dialog()
+                self.busy = False
+
+            self.root.after(0, done)
+        except Exception as e:
+            logger.error(f"拉取失败: {e}")
+            self.root.after(0, lambda err=e: messagebox.showerror("错误", f"拉取失败: {err}"))
+            self.root.after(0, lambda: self.work_status_var.set("拉取失败"))
+            self.root.after(0, lambda: setattr(self, "busy", False))
+
+    def _fill_match_tree(self):
+        for item in self.match_tree.get_children():
+            self.match_tree.delete(item)
+        for email_info in self.matched_results + self.manual_queue:
+            try:
+                if email_info.get("date_obj"):
+                    date_str = email_info["date_obj"].strftime("%Y-%m-%d %H:%M")
+                else:
+                    date_str = (email_info.get("date") or "")[:19] or "未知"
+            except Exception:
+                date_str = str(email_info.get("date", "未知"))
+            subject = email_info.get("subject", "")
+            if len(subject) > 48:
+                subject = subject[:45] + "..."
+            tag = "manual" if email_info.get("user_letter_type") else "match"
+            self.match_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    email_info.get("direction") or email_info.get("user_direction") or "?",
+                    date_str,
+                    email_info.get("sender", ""),
+                    subject,
+                ),
+                tags=(tag,),
+            )
+
+    # ----- 未匹配手工补录 -----
+    def open_unmatched_dialog(self):
+        if not self.unmatched_results:
+            messagebox.showinfo("提示", "当前没有主题不合规的来往信。")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("主题不合规 — 手工指定")
+        win.geometry("720x480")
+        win.transient(self.root)
+
+        ttk.Label(
+            win,
+            text="这些信的收发地址像地缝来往信，但主题不合规。收/发由邮箱方向自动决定；请补信件类型和收发件人。",
+            wraplength=680,
+        ).pack(anchor=tk.W, padx=10, pady=8)
+
+        cols = ("方向", "日期", "发件邮箱", "主题")
+        tree = ttk.Treeview(win, columns=cols, show="headings", height=10, selectmode="browse")
+        for c, w in zip(cols, (50, 130, 180, 300)):
+            tree.heading(c, text=c)
+            tree.column(c, width=w)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+
+        id_map = {}
+        for i, item in enumerate(self.unmatched_results):
+            try:
+                if item.get("date_obj"):
+                    date_str = item["date_obj"].strftime("%Y-%m-%d %H:%M")
+                else:
+                    date_str = (item.get("date") or "")[:19]
+            except Exception:
+                date_str = ""
+            iid = tree.insert(
+                "",
+                tk.END,
+                values=(item.get("direction", "?"), date_str, item.get("sender", ""), item.get("subject", "")),
+            )
+            id_map[iid] = i
+
+        form = ttk.LabelFrame(win, text="为所选信件填写", padding=(8, 6))
+        form.pack(fill=tk.X, padx=10, pady=6)
+        type_var = tk.StringVar()
+        sender_var = tk.StringVar()
+        receiver_var = tk.StringVar()
+        dir_var = tk.StringVar(value="")
+        ttk.Label(form, text="方向（自动）").grid(row=0, column=0, sticky=tk.W, pady=3)
+        ttk.Label(form, textvariable=dir_var).grid(row=0, column=1, sticky=tk.W, pady=3)
+        ttk.Label(form, text="信件类型").grid(row=1, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(form, textvariable=type_var, width=20).grid(row=1, column=1, sticky=tk.W, pady=3)
+        ttk.Label(form, text="例：A123 / B45 / C某某").grid(row=1, column=2, sticky=tk.W, padx=6)
+        ttk.Label(form, text="发件人").grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(form, textvariable=sender_var, width=20).grid(row=2, column=1, sticky=tk.W, pady=3)
+        ttk.Label(form, text="收件人").grid(row=3, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(form, textvariable=receiver_var, width=20).grid(row=3, column=1, sticky=tk.W, pady=3)
+
+        def on_sel(_e=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            item = self.unmatched_results[id_map[sel[0]]]
+            dir_var.set(item.get("direction", ""))
+            # 收：收件人常为自己的 OC；发：发件人常为自己的 OC
+            if item.get("direction") == "收" and self.downloader.oc_registerdata:
+                receiver_var.set(self.downloader.oc_registerdata[0].split("_")[0])
+            elif item.get("direction") == "发" and self.downloader.oc_registerdata:
+                sender_var.set(self.downloader.oc_registerdata[0].split("_")[0])
+
+        tree.bind("<<TreeviewSelect>>", on_sel)
+
+        def add_selected():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("提示", "请先选一封信。", parent=win)
+                return
+            letter_type = type_var.get().strip()
+            sname = sender_var.get().strip()
+            rname = receiver_var.get().strip()
+            if not letter_type or not sname or not rname:
+                messagebox.showwarning("提示", "请填写信件类型、发件人和收件人。", parent=win)
+                return
+            idx = id_map[sel[0]]
+            item = dict(self.unmatched_results[idx])
+            item["user_letter_type"] = letter_type
+            item["user_sender_name"] = sname
+            item["user_receiver_name"] = rname
+            item["user_direction"] = item.get("direction") or dir_var.get()
+            # 避免重复加入
+            if any(x.get("id") == item.get("id") for x in self.manual_queue):
+                messagebox.showinfo("提示", "这封已经在待下载列表里了。", parent=win)
+                return
+            self.manual_queue.append(item)
+            # 从待处理列表移除
+            self.unmatched_results.pop(idx)
+            tree.delete(sel[0])
+            # 重建 id_map
+            id_map.clear()
+            for iid in tree.get_children():
+                # values 无法还原 index；按剩余 unmatched 顺序重绑
+                pass
+            # 简单重建：清空重填
+            for iid in tree.get_children():
+                tree.delete(iid)
+            id_map.clear()
+            for i, u in enumerate(self.unmatched_results):
+                try:
+                    if u.get("date_obj"):
+                        ds = u["date_obj"].strftime("%Y-%m-%d %H:%M")
+                    else:
+                        ds = (u.get("date") or "")[:19]
+                except Exception:
+                    ds = ""
+                iid = tree.insert(
+                    "", tk.END,
+                    values=(u.get("direction", "?"), ds, u.get("sender", ""), u.get("subject", "")),
+                )
+                id_map[iid] = i
+            self._fill_match_tree()
+            self.work_status_var.set(
+                f"已手工加入 {len(self.manual_queue)} 封；待处理不合规 {len(self.unmatched_results)} 封。"
+            )
+            type_var.set("")
+            messagebox.showinfo("已加入", "已加入待下载列表。", parent=win)
+
+        bar = ttk.Frame(win)
+        bar.pack(fill=tk.X, padx=10, pady=8)
+        ttk.Button(bar, text="加入待下载", command=add_selected).pack(side=tk.LEFT)
+        ttk.Button(bar, text="关闭", command=win.destroy).pack(side=tk.RIGHT)
+
+    # ----- 下载入库 -----
+    def start_download_pipeline(self):
+        if self.busy:
+            return
+        queue = list(self.matched_results) + list(self.manual_queue)
+        if not queue:
+            messagebox.showinfo("提示", "还没有可下载的信件，请先拉取。")
+            return
+        if not self.downloader.client and not self.downloader.connect_to_email():
+            messagebox.showerror("错误", "请先登录。")
+            return
+        self.busy = True
+        self.work_progress["value"] = 0
+        self.work_status_var.set(f"准备下载 {len(queue)} 封…")
+        self.clear_work_log()
+        threading.Thread(target=self._run_download_pipeline, args=(queue,), daemon=True).start()
+
+    def _run_download_pipeline(self, queue):
+        try:
+            def progress(p, current, total):
+                def _ui(pv=p, c=current, t=total):
+                    self.work_progress["value"] = pv * 0.85
+                    self.work_status_var.set(f"下载中… {c}/{t}")
+                self.root.after(0, _ui)
+                if current <= len(queue):
+                    info = queue[current - 1]
+                    status = info.get("status", "")
+                    subject = info.get("subject", "")
+                    if status == "skipped":
+                        msg = f"[{current}/{total}] 跳过: {subject}\n"
+                    elif status == "failed":
+                        msg = f"[{current}/{total}] 失败: {subject}\n"
+                    elif status == "success":
+                        msg = f"[{current}/{total}] 已下载: {subject}\n"
+                    else:
+                        msg = f"[{current}/{total}] 处理中: {subject}\n"
+                    self.root.after(0, lambda m=msg: self.add_work_log(m))
+
+            results = self.downloader.download_multiple_emails(queue, progress)
+            success = len([r for r in results if r.get("status") == "success"])
+            skipped = len([r for r in results if r.get("status") == "skipped"])
+            failed = len([r for r in results if r.get("status") == "failed"])
+
+            def finish():
+                try:
+                    self._persist_oc_header()
+                    # 确保别名进 downloader，供报告写入
+                    self.work_status_var.set("正在识别收件人…")
+                    self.work_progress["value"] = 90
+                    guess = self.smart_guess_receivers(notify=False) or ""
+                    self.summary_var.set(
+                        f"找到并处理 {len(queue)} 封。新下载 {success}，跳过 {skipped}，失败 {failed}。\n\n{guess}"
+                    )
+                    self.work_progress["value"] = 100
+                    self.work_status_var.set("入库完成，正在打开[地缝可视化]")
+                    self.add_work_log("\n入库完成。\n")
+                    self.refresh_inventory()
+                    if self.open_visualization_html():
+                        self.work_status_var.set("入库完成，[地缝可视化]已打开")
+                finally:
+                    self.busy = False
+
+            self.root.after(0, finish)
+        except Exception as e:
+            logger.error(f"入库失败: {e}")
+            self.root.after(0, lambda err=e: messagebox.showerror("错误", f"入库失败: {err}"))
+            self.root.after(0, lambda: self.work_status_var.set("入库失败"))
+            self.root.after(0, lambda: setattr(self, "busy", False))
+
+    def add_work_log(self, text):
+        self.work_log.configure(state="normal")
+        self.work_log.insert(tk.END, text)
+        self.work_log.see(tk.END)
+        self.work_log.configure(state="disabled")
+
+    def clear_work_log(self):
+        self.work_log.configure(state="normal")
+        self.work_log.delete(1.0, tk.END)
+        self.work_log.configure(state="disabled")
+
+    def open_log_folder(self):
+        try:
+            path = str(log_dir)
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开日志文件夹: {e}")
+
+    def view_download_report(self):
+        report_path = self.downloader.base_dir / "download_report.txt"
+        if not report_path.exists():
+            messagebox.showinfo("提示", "还没有下载报告。")
+            return
+        try:
+            text = report_path.read_text(encoding="utf-8")
+            dlg = tk.Toplevel(self.root)
+            dlg.title("下载报告")
+            dlg.geometry("700x500")
+            box = scrolledtext.ScrolledText(dlg, wrap=tk.WORD)
+            box.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            box.insert(tk.END, text)
+            box.configure(state="disabled")
+            ttk.Button(dlg, text="关闭", command=dlg.destroy).pack(pady=8)
+            dlg.transient(self.root)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开下载报告: {e}")
+
+    def open_visualization_html(self):
+        html_path = script_dir / "visualization_private.html"
+        if not html_path.exists():
+            messagebox.showerror("错误", f"未找到可视化文件:\n{html_path}")
+            return False
+        webbrowser.open_new_tab("file:///" + str(html_path).replace("\\", "/"))
+        return True
+
+    # ==================== 高级设置 ====================
+    def _build_advanced_tab(self):
+        inner = self._scrollable(self.advanced_frame)
+
+        ttk.Label(
+            inner,
+            text="存储、收信解析规则相关的设置",
+            wraplength=500,
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        path_box = ttk.LabelFrame(inner, text="存储与连接", padding=(8, 6))
+        path_box.pack(fill=tk.X, pady=4)
+        path_box.columnconfigure(1, weight=1)
+        ttk.Label(path_box, text="根目录").grid(row=0, column=0, sticky=tk.W, pady=4, padx=(0, 8))
+        ttk.Entry(path_box, textvariable=self.root_dir_var).grid(row=0, column=1, sticky=tk.EW, pady=4)
+        dir_btns = ttk.Frame(path_box)
+        dir_btns.grid(row=0, column=2, padx=4)
+        ttk.Button(dir_btns, text="浏览…", command=self._browse_root_dir).pack(side=tk.LEFT, padx=2)
+        ttk.Button(dir_btns, text="恢复默认", command=lambda: self.root_dir_var.set(str(script_dir))).pack(side=tk.LEFT)
+        ttk.Label(path_box, text="信件保存在：根目录\\email\\", foreground="gray").grid(
+            row=1, column=0, columnspan=3, sticky=tk.W
         )
 
-    def toggle_search_mode(self):
-        """切换检索模式（手动/配置化）"""
-        mode = self.search_mode_var.get()
-        if mode == "config":
-            try:
-                rule_num = int(self.rule_choice_var.get())
-                rule = self.downloader.get_default_rule(rule_num)
-                self.subject_var.set(rule.get('subject_pattern', ''))
-                self.sender_var.set(rule.get('from', ''))
-                self.recipient_var.set(rule.get('to', ''))
-                # 只禁用文本输入框，不禁用DateEntry
-                for widget in self.search_frame.winfo_children():
-                    if isinstance(widget, ttk.Entry):
-                        widget.configure(state="readonly")
-            except Exception as e:
-                messagebox.showerror("错误", f"加载配置规则失败: {str(e)}")
-                self.search_mode_var.set("manual")
-        else:
-            for widget in self.search_frame.winfo_children():
-                if isinstance(widget, ttk.Entry):
-                    widget.configure(state="normal")
+        ttk.Label(path_box, text="IMAP 服务器").grid(row=2, column=0, sticky=tk.W, pady=4, padx=(0, 8))
+        ttk.Entry(path_box, textvariable=self.server_var).grid(row=2, column=1, sticky=tk.EW, pady=4)
+        ttk.Label(path_box, text="端口").grid(row=3, column=0, sticky=tk.W, pady=4, padx=(0, 8))
+        ttk.Entry(path_box, textvariable=self.imap_port_var, width=8).grid(row=3, column=1, sticky=tk.W, pady=4)
+        ttk.Label(path_box, text="连接超时（秒）").grid(row=4, column=0, sticky=tk.W, pady=4, padx=(0, 8))
+        ttk.Entry(path_box, textvariable=self.timeout_var, width=8).grid(row=4, column=1, sticky=tk.W, pady=4)
+        ttk.Label(path_box, text="批处理大小").grid(row=5, column=0, sticky=tk.W, pady=4, padx=(0, 8))
+        ttk.Entry(path_box, textvariable=self.batch_var, width=8).grid(row=5, column=1, sticky=tk.W, pady=4)
 
-    def create_widgets(self):
-        """创建GUI组件"""
-        # 创建主框架
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        rule_box = ttk.LabelFrame(inner, text="检索规则（正则 / 地址）", padding=(8, 6))
+        rule_box.pack(fill=tk.X, pady=6)
+        rule_box.columnconfigure(1, weight=1)
+        ttk.Label(rule_box, text="规则1·收信 发件").grid(row=0, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule1_from).grid(row=0, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(rule_box, text="规则1·收信 收件").grid(row=1, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule1_to).grid(row=1, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(rule_box, text="规则1·主题正则").grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule1_subject).grid(row=2, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(rule_box, text="规则2·发信 发件").grid(row=3, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule2_from).grid(row=3, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(rule_box, text="规则2·发信 收件").grid(row=4, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule2_to).grid(row=4, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(rule_box, text="规则2·主题正则").grid(row=5, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(rule_box, textvariable=self.adv_rule2_subject).grid(row=5, column=1, sticky=tk.EW, pady=3)
 
-        # 使用Notebook创建选项卡
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill=tk.BOTH, expand=True)
-        # 保存为实例属性，便于其他方法切换选项卡
-        self.notebook = notebook
+        help_box = ttk.LabelFrame(inner, text="智能补全时，发生了什么", padding=(8, 6))
+        help_box.pack(fill=tk.X, pady=6)
+        help_text = (
+            "收信时，缺少足够分清「这封信究竟寄给谁」的规则，因此做了如下猜测。\n"
+            "只处理「收」且收件人栏为空的行；已有收件人的不会改。\n"
+            "· 只登记了一个角色：必然发给此角色，空缺直接填成该角色。\n"
+            "· 多个角色时：\n"
+            "  - A / B 信：填所有「注册日期 ≤ 发信日期」的角色（A 信面向所有注册者）。\n"
+            "  - C / A+C 信：在正文 content.txt 里检索角色主名及其别名；"
+            "命中别名会归到主名，能唯一确定才填主名。\n"
+            "· 发信的收件人多半在入库时已从 C 信类型等规则写出；这里主要补收信。\n"
+            "因此「新下载了几封」和「补全了几封」不是一回事：收件人已经写好时，"
+            "摘要会写「没有需要补全的空缺」。"
+        )
+        ttk.Label(help_box, text=help_text, justify=tk.LEFT, wraplength=500).pack(anchor=tk.W)
 
-        # 创建三个选项卡
-        self.login_frame = ttk.Frame(notebook, padding="10")
-        self.search_frame = ttk.Frame(notebook, padding="10")
-        self.download_frame = ttk.Frame(notebook, padding="10")
+        foot = ttk.Frame(self.advanced_frame)
+        foot.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(foot, text="保存高级设置", command=self.save_advanced_settings).pack(side=tk.RIGHT)
 
-        notebook.add(self.login_frame, text="登录设置")
-        notebook.add(self.search_frame, text="搜索邮件")
-        notebook.add(self.download_frame, text="下载结果")
-
-        # 登录设置选项卡
-        self.create_login_tab()
-        # 搜索邮件选项卡
-        self.create_search_tab()
-        # 下载结果选项卡
-        self.create_download_tab()
-
-        # 底部状态栏
-        status_frame = ttk.Frame(self.root, relief=tk.SUNKEN, padding=(2, 2))
-        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
-
-        self.status_var = tk.StringVar()
-        self.status_var.set("就绪")
-        status_label = ttk.Label(status_frame, textvariable=self.status_var, anchor=tk.W)
-        status_label.pack(side=tk.LEFT, fill=tk.X)
-
-        # 版本信息
-        version_label = ttk.Label(status_frame, text="v1.0", anchor=tk.E)
-        version_label.pack(side=tk.RIGHT)
-        
-    def open_visualization_html(self):
-        """从用户配置的根目录打开 visualization_private.html"""
-        import webbrowser
-        import os
-        
-        # ✅ 从用户配置的根目录查找
-        root_dir = Path(self.root_dir_var.get())
-        html_path = root_dir / "visualization_private.html"
-        
-        if not html_path.exists():
-            messagebox.showerror("错误", f"未找到可视化文件:\n{html_path}\n\n请确保 visualization_private.html 在根目录下")
-            return
-        
-        url = "file:///" + str(html_path).replace("\\", "/")
-        webbrowser.open_new_tab(url)
-
-    def browse_root_directory(self):
-        """浏览并选择根目录"""
+    def _browse_root_dir(self):
         from tkinter import filedialog
         directory = filedialog.askdirectory(
             initialdir=self.root_dir_var.get(),
-            title="选择根目录（邮件将存储在 根目录\\email\\ 下）"
+            title="选择根目录（邮件将存在 根目录\\email\\ 下）",
         )
         if directory:
             self.root_dir_var.set(directory)
 
-    def reset_root_directory(self):
-        """恢复默认根目录"""
-        self.root_dir_var.set(str(script_dir))
-        messagebox.showinfo("已恢复", f"已恢复为默认根目录:\n{script_dir}")
-
-    def save_settings(self):
-        """保存设置"""
+    def save_advanced_settings(self):
         try:
-            self.downloader.email_addr = self.email_var.get()
-            self.downloader.password = self.password_var.get()
-            self.downloader.imap_server = self.server_var.get()
             self.downloader.timeout = int(self.timeout_var.get())
             self.downloader.batch_size = int(self.batch_var.get())
-            
-            # ✅ 新增：保存根目录
+            self.downloader.imap_port = int(self.imap_port_var.get())
+            self.downloader.imap_server = self.server_var.get().strip()
             root_path = Path(self.root_dir_var.get())
-            if not root_path.exists():
-                root_path.mkdir(parents=True, exist_ok=True)
-            
-            # 更新 base_dir（邮件存储在 根目录\email 下）
+            root_path.mkdir(parents=True, exist_ok=True)
             self.downloader.base_dir = root_path / "email"
             self.downloader.base_dir.mkdir(parents=True, exist_ok=True)
-            
+
+            if "DefaultRules" not in self.downloader.config:
+                self.downloader.config["DefaultRules"] = {}
+            rules = self.downloader.config["DefaultRules"]
+            rules["rule1_from"] = self.adv_rule1_from.get().strip()
+            rules["rule1_to"] = self.adv_rule1_to.get().strip() or "{self_email}"
+            rules["rule1_subject_pattern"] = self.adv_rule1_subject.get().strip()
+            rules["rule2_from"] = self.adv_rule2_from.get().strip() or "{self_email}"
+            rules["rule2_to"] = self.adv_rule2_to.get().strip()
+            rules["rule2_subject_pattern"] = self.adv_rule2_subject.get().strip()
+
             self.downloader.save_config()
-            messagebox.showinfo("成功", "设置已保存")
+            self.load_oc_from_tsv()
+            self.refresh_inventory()
+            messagebox.showinfo("已保存", "高级设置已保存。")
         except Exception as e:
-            messagebox.showerror("错误", f"保存设置失败: {str(e)}")
+            messagebox.showerror("错误", f"保存失败: {e}")
 
-    def create_login_tab(self):
-        """创建登录设置选项卡"""
-        # 邮箱设置框架
-        settings_frame = ttk.LabelFrame(self.login_frame, text="邮箱设置", padding=(10, 5))
-        settings_frame.pack(fill=tk.X, pady=10)
-        
-        # 邮箱地址
-        ttk.Label(settings_frame, text="邮箱地址:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.email_var = tk.StringVar(value=self.downloader.email_addr)
-        email_entry = ttk.Entry(settings_frame, textvariable=self.email_var, width=40)
-        email_entry.grid(row=0, column=1, sticky=tk.W, pady=5)
-        
-        # 密码/授权码
-        ttk.Label(settings_frame, text="授权码:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.password_var = tk.StringVar(value=self.downloader.password)
-        password_entry = ttk.Entry(settings_frame, textvariable=self.password_var, show="*", width=40)
-        password_entry.grid(row=1, column=1, sticky=tk.W, pady=5)
-        
-        # IMAP服务器
-        ttk.Label(settings_frame, text="IMAP服务器:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.server_var = tk.StringVar(value=self.downloader.imap_server)
-        server_entry = ttk.Entry(settings_frame, textvariable=self.server_var, width=40)
-        server_entry.grid(row=2, column=1, sticky=tk.W, pady=5)
-        
-        # 常用服务器下拉菜单
-        ttk.Label(settings_frame, text="常用服务器:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        servers = {
-            "QQ邮箱": "imap.qq.com",
-            "Gmail": "imap.gmail.com",
-            "Outlook": "outlook.office365.com",
-            "163邮箱": "imap.163.com",
-            "126邮箱": "imap.126.com"
-        }
-        server_names = list(servers.keys())
-        self.server_combo = ttk.Combobox(settings_frame, values=server_names, width=38)
-        self.server_combo.grid(row=3, column=1, sticky=tk.W, pady=5)
-        self.server_combo.bind("<<ComboboxSelected>>", lambda e: self.server_var.set(servers[self.server_combo.get()]))
-        
-        # ✅ 新增：根目录框架
-        root_dir_frame = ttk.LabelFrame(self.login_frame, text="根目录设置", padding=(10, 5))
-        root_dir_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(root_dir_frame, text="根目录:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.root_dir_var = tk.StringVar(value=str(script_dir))
-        root_dir_entry = ttk.Entry(root_dir_frame, textvariable=self.root_dir_var, width=50)
-        root_dir_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
-        
-        browse_btn = ttk.Button(root_dir_frame, text="浏览...", command=self.browse_root_directory)
-        browse_btn.grid(row=0, column=2, padx=5, pady=5)
-        
-        reset_btn = ttk.Button(root_dir_frame, text="恢复默认", command=self.reset_root_directory)
-        reset_btn.grid(row=0, column=3, padx=5, pady=5)
-        
-        info_label = ttk.Label(root_dir_frame, text="邮件将存储在: 根目录\\email\\收(发)\\日期_主题", foreground="gray")
-        info_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=5)
+    # ==================== 库存 ====================
+    def _build_inventory_tab(self):
+        top = ttk.Frame(self.inventory_frame)
+        top.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(top, text="已入库信件。在此改动信息。").pack(side=tk.LEFT)
+        ttk.Button(top, text="刷新", command=self.refresh_inventory).pack(side=tk.RIGHT)
 
-        # 高级设置框架
-        advanced_frame = ttk.LabelFrame(self.login_frame, text="高级设置", padding=(10, 5))
-        advanced_frame.pack(fill=tk.X, pady=10)
-        
-        # 超时设置
-        ttk.Label(advanced_frame, text="连接超时(秒):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.timeout_var = tk.StringVar(value=str(self.downloader.timeout))
-        timeout_entry = ttk.Entry(advanced_frame, textvariable=self.timeout_var, width=10)
-        timeout_entry.grid(row=0, column=1, sticky=tk.W, pady=5)
-        
-        # 批量大小
-        ttk.Label(advanced_frame, text="批处理大小:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.batch_var = tk.StringVar(value=str(self.downloader.batch_size))
-        batch_entry = ttk.Entry(advanced_frame, textvariable=self.batch_var, width=10)
-        batch_entry.grid(row=1, column=1, sticky=tk.W, pady=5)
+        cols = ("收/发", "日期", "发件人", "收件人", "信件类型", "路径")
+        wrap = ttk.Frame(self.inventory_frame)
+        wrap.pack(fill=tk.BOTH, expand=True)
+        self.inv_tree = ttk.Treeview(wrap, columns=cols, show="headings", selectmode="browse")
+        vsb = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=self.inv_tree.yview)
+        self.inv_tree.configure(yscroll=vsb.set)
+        self.inv_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        for c, w in zip(cols, (50, 100, 120, 120, 100, 220)):
+            self.inv_tree.heading(c, text=c)
+            self.inv_tree.column(c, width=w)
+        self.inv_tree.bind("<<TreeviewSelect>>", self._on_inv_select)
 
-        
-        
-        # 按钮框架
-        button_frame = ttk.Frame(self.login_frame)
-        button_frame.pack(fill=tk.X, pady=20)
-        
-        # 测试连接按钮
-        test_conn_btn = ttk.Button(button_frame, text="测试连接并登录", command=self.test_connection)
-        test_conn_btn.pack(side=tk.LEFT, padx=10)
-        
-        # 保存设置按钮
-        save_settings_btn = ttk.Button(button_frame, text="保存设置", command=self.save_settings)
-        save_settings_btn.pack(side=tk.LEFT, padx=10)
-        
-        # 帮助信息
-        help_text = """
-        步骤说明：
-        1. 获取授权码：在邮箱设置里获取 IMAP/授权码，如有日期限制，请选择全部而不是30天。
-        2. 登录：在“登录设置”中填写邮箱地址、授权码与 IMAP 服务器，点击“测试连接并登录”确认可用。
-        3. 注册 OC：在“下载结果”页注册你的 OC，即其第一次使用地缝的时间（格式：名称_YYYY-MM-DD），用于后续自动匹配与标注。
-        4. 选择检索规则：在“搜索邮件”页选择收发规则。如有必要，手动填写主题/发件人/日期等规则，留空表示全选，然后点击“搜索邮件”。[语法为正则搜索]
-        5. 智能补齐：若同一 OC 有多个马甲，下载完成后可点击“智能猜测收件人”自动补齐 global_result.tsv 中的收件人字段。
-        6. 手工修正：在生成的 global_result.tsv 中对不满意的条目（收件人、路径等）进行手工修正。
-        7. 启动可视化：在“下载结果”页点击“打开邮件网络可视化”查看关系图。
+        edit = ttk.LabelFrame(self.inventory_frame, text="编辑所选", padding=(8, 6))
+        edit.pack(fill=tk.X, pady=6)
+        self.inv_sender_var = tk.StringVar()
+        self.inv_receiver_var = tk.StringVar()
+        self.inv_type_var = tk.StringVar()
+        self.inv_meta_var = tk.StringVar(value="")
+        ttk.Label(edit, textvariable=self.inv_meta_var).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=2)
+        ttk.Label(edit, text="发件人").grid(row=1, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(edit, textvariable=self.inv_sender_var, width=18).grid(row=1, column=1, padx=4)
+        ttk.Label(edit, text="收件人").grid(row=1, column=2, sticky=tk.W, padx=(8, 0))
+        ttk.Entry(edit, textvariable=self.inv_receiver_var, width=18).grid(row=1, column=3, padx=4)
+        ttk.Label(edit, text="信件类型").grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(edit, textvariable=self.inv_type_var, width=18).grid(row=2, column=1, padx=4, pady=3)
+        ttk.Button(edit, text="保存修改", command=self.save_inventory_row).grid(row=2, column=3, sticky=tk.E, padx=4)
 
-        ！注意，当信件格式出现纰漏时，可能导致部分信息无法正确解析。当出现这种情况时：
-        1. 在email文件夹，仿照其他其他已经被正确填装的信件，手工修正content.txt中的发件人等信息。
-        2. 然后重新运行“智能猜测收件人”功能，补齐global_result.tsv中的收件人字段。
-        3. 如果出现收发信人被识别为自己的邮箱而非oc名时，请手动修正为oc名。
+        foot = ttk.Frame(self.inventory_frame)
+        foot.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(foot, text="打开该信文件夹", command=self.open_selected_mail_folder).pack(side=tk.LEFT)
+        ttk.Button(foot, text="打开邮件总文件夹", command=self.open_storage_folder).pack(side=tk.LEFT, padx=6)
+        ttk.Button(foot, text="打开[地缝可视化]", command=self.open_visualization_html).pack(side=tk.RIGHT)
 
-        玩的开心！
-        """
-        
-        help_frame = ttk.LabelFrame(self.login_frame, text="帮助信息")
-        help_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        help_text_widget = scrolledtext.ScrolledText(help_frame, wrap=tk.WORD, height=8)
-        help_text_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        help_text_widget.insert(tk.END, help_text)
-        help_text_widget.configure(state="disabled")
-    
-    def create_search_tab(self):
-        """创建搜索选项卡"""
+        self._inv_rows = []  # parallel to tree children order
 
-        oc_frame = ttk.LabelFrame(self.search_frame, text="填写OC名及该OC注册时间 [格式: 名称_YYYY-MM-DD]", padding=(10, 5))
-        oc_frame.pack(fill=tk.X, pady=5)
-        
-        self.oc_input_var = tk.StringVar()
-        oc_entry = ttk.Entry(oc_frame, textvariable=self.oc_input_var, width=40)
-        oc_entry.pack(side=tk.LEFT, padx=5)
-        
-        oc_register_btn = ttk.Button(oc_frame, text="注册", command=self.register_oc)
-        oc_register_btn.pack(side=tk.LEFT, padx=5)
-        
-        oc_info_label = ttk.Label(oc_frame, text="(可多次注册多个OC)", foreground="gray")
-        oc_info_label.pack(side=tk.LEFT, padx=5)
-        
-        # 【新增】别名注册框架
-        alias_frame = ttk.LabelFrame(self.search_frame, text="注册OC别名 (绑定关系为 主名=别名1=别名2)", padding=(10, 5))
-        alias_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(alias_frame, text="主名:").pack(side=tk.LEFT, padx=5)
-        self.alias_main_var = tk.StringVar()
-        # 允许手动输入也允许下拉选择（state="normal" 可编辑）
-        self.alias_main_combo = ttk.Combobox(alias_frame, textvariable=self.alias_main_var, width=15, state="normal")
-        self.alias_main_combo.pack(side=tk.LEFT, padx=5)
-        # 点击或获得焦点时刷新下拉列表，但不会阻止手动输入
-        self.alias_main_combo.bind('<Button-1>', self.update_main_oc_list)
-        self.alias_main_combo.bind('<FocusIn>', self.update_main_oc_list)
-
-        ttk.Label(alias_frame, text="= 别名(多个逗号分隔):").pack(side=tk.LEFT, padx=5)
-        self.alias_sub_var = tk.StringVar()
-        ttk.Entry(alias_frame, textvariable=self.alias_sub_var, width=25).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(alias_frame, text="确定别名", command=self.register_alias).pack(side=tk.LEFT, padx=5)
-        
-        # 文件夹选择框架
-        folder_frame = ttk.LabelFrame(self.search_frame, text="选择邮箱文件夹", padding=(10, 5))
-        folder_frame.pack(fill=tk.X, pady=5)
-        
-        # 文件夹列表
-        ttk.Label(folder_frame, text="文件夹:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.folder_var = tk.StringVar()
-        self.folder_combo = ttk.Combobox(folder_frame, textvariable=self.folder_var, width=40)
-        self.folder_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
-        
-        # 刷新按钮
-        refresh_btn = ttk.Button(folder_frame, text="刷新列表", command=self.refresh_folders)
-        refresh_btn.grid(row=0, column=2, padx=5, pady=5)
-        
-        # 检索方式选择
-        mode_frame = ttk.LabelFrame(self.search_frame, text="检索方式", padding=(10, 5))
-        mode_frame.pack(fill=tk.X, pady=5)
-        # ...在mode_frame之后添加...
-        self.rule_choice_var = tk.StringVar(value="1")
-        rule_frame = ttk.Frame(self.search_frame)
-        rule_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(rule_frame, text="自动化配置规则[仅在选择配置化检索时可用,1下载收件,2下载发件]:").pack(side=tk.LEFT)
-        self.rule_combo = ttk.Combobox(rule_frame, textvariable=self.rule_choice_var, width=10, state="readonly")
-        self.rule_combo['values'] = ["1", "2"]
-        self.rule_combo.pack(side=tk.LEFT, padx=5)
-        self.rule_combo.bind("<<ComboboxSelected>>", lambda e: self.toggle_search_mode())
-
-        self.search_mode_var = tk.StringVar(value="manual")
-        ttk.Radiobutton(mode_frame, text="手动检索[自行输入检索规则]", variable=self.search_mode_var, 
-                    value="manual", command=self.toggle_search_mode).pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(mode_frame, text="配置化检索[采用已配置好的检索规则]", variable=self.search_mode_var, 
-                    value="config", command=self.toggle_search_mode).pack(side=tk.LEFT, padx=10)
-        
-        # 搜索条件框架
-        search_frame = ttk.LabelFrame(self.search_frame, text="搜索条件[留空则为全选]", padding=(10, 5))
-        search_frame.pack(fill=tk.X, pady=10)
-        
-        # 日期范围
-        ttk.Label(search_frame, text="起始日期:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.start_date_var = tk.StringVar()
-        self.start_date_picker = DateEntry(search_frame, width=12, textvariable=self.start_date_var, 
-                                          date_pattern='yyyy-mm-dd')
-        self.start_date_picker.grid(row=0, column=1, sticky=tk.W, pady=5)
-        self.start_date_picker.delete(0, tk.END)  # 清空默认值
-        
-        ttk.Label(search_frame, text="结束日期:").grid(row=0, column=2, sticky=tk.W, pady=5)
-        self.end_date_var = tk.StringVar()
-        self.end_date_picker = DateEntry(search_frame, width=12, textvariable=self.end_date_var, 
-                                        date_pattern='yyyy-mm-dd')
-        self.end_date_picker.grid(row=0, column=3, sticky=tk.W, pady=5)
-        
-        # 发件人
-        ttk.Label(search_frame, text="发件邮箱:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.sender_var = tk.StringVar()
-        sender_entry = ttk.Entry(search_frame, textvariable=self.sender_var, width=40)
-        sender_entry.grid(row=1, column=1, columnspan=3, sticky=tk.W, pady=5)
-        
-        # 收件人
-        ttk.Label(search_frame, text="收件邮箱:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.recipient_var = tk.StringVar()
-        recipient_entry = ttk.Entry(search_frame, textvariable=self.recipient_var, width=40)
-        recipient_entry.grid(row=2, column=1, columnspan=3, sticky=tk.W, pady=5)
-        
-        # 主题
-        ttk.Label(search_frame, text="主题包含:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        self.subject_var = tk.StringVar()
-        subject_entry = ttk.Entry(search_frame, textvariable=self.subject_var, width=40)
-        subject_entry.grid(row=3, column=1, columnspan=3, sticky=tk.W, pady=5)
-        
-        # 最大结果数
-        ttk.Label(search_frame, text="最多搜索:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.max_results_var = tk.StringVar(value="1500")
-        max_results_entry = ttk.Entry(search_frame, textvariable=self.max_results_var, width=10)
-        max_results_entry.grid(row=4, column=1, sticky=tk.W, pady=5)
-        ttk.Label(search_frame, text="封邮件").grid(row=4, column=2, sticky=tk.W, pady=5)
-        
-        # 搜索按钮
-        # ✅ 修改：按钮框架（搜索、清除、全选、下载并列）
-        button_frame = ttk.Frame(self.search_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        # 左侧：搜索和清除按钮
-        search_btn = ttk.Button(button_frame, text="搜索邮件", command=self.search_emails)
-        search_btn.pack(side=tk.LEFT, padx=10)
-        
-        clear_btn = ttk.Button(button_frame, text="清除条件", command=self.clear_search)
-        clear_btn.pack(side=tk.LEFT, padx=10)
-
-        # ✅ 新增：一键处理按钮
-        one_click_btn = ttk.Button(
-            button_frame, 
-            text="⚡ 一键处理", 
-            command=self.one_click_process,
-        )
-        one_click_btn.pack(side=tk.LEFT, padx=10)        
-        
-        # 右侧：全选和下载按钮
-        download_selected_btn = ttk.Button(button_frame, text="下载选中邮件", 
-                                        command=self.download_selected)
-        download_selected_btn.pack(side=tk.RIGHT, padx=10)
-        
-        self.select_all_var = tk.BooleanVar()
-        select_all_check = ttk.Checkbutton(button_frame, text="全选", 
-                                        variable=self.select_all_var, 
-                                        command=self.toggle_select_all)
-        select_all_check.pack(side=tk.RIGHT, padx=10)
-        
-        # 搜索结果框架
-        results_frame = ttk.LabelFrame(self.search_frame, text="搜索结果")
-        results_frame.pack(fill=tk.X, expand=False, pady=6)
-        
-        # 创建表格
-        columns = ("序号", "日期", "发件人", "主题")
-        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="headings", 
-                                        selectmode="extended", height=8)
-        self.results_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # 添加滚动条
-        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
-        self.results_tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # 设置列宽和标题
-        self.results_tree.heading("序号", text="序号")
-        self.results_tree.heading("日期", text="日期")
-        self.results_tree.heading("发件人", text="发件人")
-        self.results_tree.heading("主题", text="主题")
-        
-        self.results_tree.column("序号", width=50, anchor="center")
-        self.results_tree.column("日期", width=150)
-        self.results_tree.column("发件人", width=200)
-        self.results_tree.column("主题", width=400)
-        
-        # 状态和进度条框架
-        status_frame = ttk.Frame(self.search_frame)
-        status_frame.pack(fill=tk.X, pady=5)
-        
-        self.search_status_var = tk.StringVar()
-        search_status = ttk.Label(status_frame, textvariable=self.search_status_var)
-        search_status.pack(side=tk.LEFT, padx=5)
-        
-        self.search_progress = ttk.Progressbar(status_frame, orient=tk.HORIZONTAL, length=200, mode='determinate')
-        self.search_progress.pack(side=tk.RIGHT, padx=5)
-
-    def register_oc(self):
-        val = self.oc_input_var.get().strip()
-        if val:
-            # 只注册不重复的OC
-            if val not in self.downloader.oc_registerdata:
-                self.downloader.oc_registerdata.append(val)
-            # 立即写入 global_result.tsv 的 oc_registerdata 字段
-            global_result_path = self.downloader.base_dir / "global_result.tsv"
-            if os.path.exists(global_result_path):
-                with open(global_result_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                if lines and lines[0].startswith("oc_registerdata"):
-                    # 更新第一行
-                    oc_line = lines[0].strip().split('\t')
-                    all_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()] if len(oc_line) > 1 else [])
-                    all_oc.update(self.downloader.oc_registerdata)
-                    new_oc_line = f"oc_registerdata\t{','.join(sorted(all_oc))}\n"
-                    lines[0] = new_oc_line
-                    with open(global_result_path, "w", encoding="utf-8") as f:
-                        f.writelines(lines)
-            messagebox.showinfo("注册成功", f"已注册: {val}")
-            self.oc_input_var.set("")
-
-    # 【新增】下拉菜单点击前动态加载 TSV 中的 OC 列表
-    def update_main_oc_list(self, event=None):
-        global_result_path = self.downloader.base_dir / "global_result.tsv"
-        oc_list = []
-        if os.path.exists(global_result_path):
-            with open(global_result_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                if lines and lines[0].startswith("oc_registerdata"):
-                    oc_line = lines[0].strip().split('\t')
-                    if len(oc_line) > 1 and oc_line[1]:
-                        for item in oc_line[1].split(','):
-                            name = item.split('_')[0]
-                            if name:
-                                oc_list.append(name)
-        # 用集合去重后放入下拉选项
-        self.alias_main_combo['values'] = sorted(list(set(oc_list)))
-
-    # 【新增】点击“确定别名”按钮的执行逻辑
-    def register_alias(self):
-        main_name = self.alias_main_var.get().strip()
-        sub_names_str = self.alias_sub_var.get().strip()
-        
-        if not main_name or not sub_names_str:
-            messagebox.showwarning("提示", "主名和别名不能为空")
+    def refresh_inventory(self):
+        path = self.downloader.base_dir / "global_result.tsv"
+        for item in self.inv_tree.get_children():
+            self.inv_tree.delete(item)
+        self._inv_rows = []
+        self._inv_header_lines = []
+        if not path.exists():
+            self.status_var.set("还没有库存文件")
             return
-        # 若主名为手动输入且未在 oc_registerdata 中，自动追加并写回 global_result.tsv（避免无主名）
-        try:
-            if main_name and main_name not in self.downloader.oc_registerdata:
-                self.downloader.oc_registerdata.append(main_name)
-                global_result_path = self.downloader.base_dir / "global_result.tsv"
-                if os.path.exists(global_result_path):
-                    with open(global_result_path, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    if lines and lines[0].startswith("oc_registerdata"):
-                        oc_line = lines[0].strip().split('\t')
-                        all_oc = set([x.strip() for x in oc_line[1].split(',') if x.strip()] if len(oc_line) > 1 else [])
-                        all_oc.update(self.downloader.oc_registerdata)
-                        lines[0] = f"oc_registerdata\t{','.join(sorted(all_oc))}\n"
-                        with open(global_result_path, "w", encoding="utf-8") as f:
-                            f.writelines(lines)
-        except Exception:
-            pass
-
-
-        # 兼容中文逗号和多余的等号切割
-        sub_names = [x.strip() for x in sub_names_str.replace('，', ',').replace('=', ',').split(',') if x.strip()]
-        if not sub_names:
-            return
-            
-        global_result_path = self.downloader.base_dir / "global_result.tsv"
-        if not os.path.exists(global_result_path):
-            messagebox.showwarning("提示", "未找到 global_result.tsv，请先下载邮件生成记录。")
-            return
-            
-        with open(global_result_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            
-        aliases_dict = {}
-        alias_line_idx = -1
-        
-        # 查找是否存在 oc_aliases 这一行
+        lines = path.read_text(encoding="utf-8").splitlines()
+        data_start = -1
+        header = []
         for i, line in enumerate(lines):
-            if line.startswith("oc_aliases"):
-                alias_line_idx = i
-                cols = line.strip().split('\t')
-                if len(cols) > 1 and cols[1]:
-                    # 格式如 a=b=c,m=n
-                    for group in cols[1].split(','):
-                        group = group.strip()
-                        if group:
-                            parts = group.split('=')
-                            if len(parts) > 1:
-                                aliases_dict[parts[0]] = parts[1:]
+            if line.startswith("收/发类型") or line.startswith("收/发"):
+                data_start = i
+                header = lines[: i + 1]
                 break
-            elif line.startswith("收/发类型"):
-                break
-                
-        # 追加新别名
-        if main_name in aliases_dict:
-            aliases_dict[main_name].extend(sub_names)
-            # 去重
-            aliases_dict[main_name] = list(set(aliases_dict[main_name]))
-        else:
-            aliases_dict[main_name] = list(set(sub_names))
-            
-        # 重构 oc_aliases 行字符串
-        alias_str_list = []
-        for k, v in aliases_dict.items():
-            if v:
-                alias_str_list.append(f"{k}={'='.join(v)}")
-        new_alias_line = f"oc_aliases\t{','.join(alias_str_list)}\n"
-        
-        # 写回
-        if alias_line_idx != -1:
-            lines[alias_line_idx] = new_alias_line
-        else:
-            # 插入到 oc_registerdata 后（默认在第2行）
-            lines.insert(1, new_alias_line)
-            
-        with open(global_result_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-            
-        messagebox.showinfo("成功", f"成功添加别名: {main_name} = {'='.join(sub_names)}")
-        self.alias_sub_var.set("")
-
-    def create_download_tab(self):
-        """创建下载选项卡"""
-
-
-        # 下载进度框架
-        progress_frame = ttk.LabelFrame(self.download_frame, text="下载进度", padding=(10, 5))
-        progress_frame.pack(fill=tk.X, pady=5)
-        
-        self.download_status_var = tk.StringVar(value="等待下载...")
-        download_status = ttk.Label(progress_frame, textvariable=self.download_status_var)
-        download_status.pack(fill=tk.X, pady=5)
-        
-        self.download_progress = ttk.Progressbar(progress_frame, orient=tk.HORIZONTAL, length=100, 
-                                            mode='determinate')
-        self.download_progress.pack(fill=tk.X, pady=5)
-        # 下载结果框架（纵向可拉伸）
-        results_frame = ttk.LabelFrame(self.download_frame, text="下载结果")
-        results_frame.pack(fill=tk.BOTH, expand=True, pady=6)  # 允许纵向扩展
-
-        # 创建文本区域，height 可以适当增大
-        self.download_log = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, height=15)
-        self.download_log.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)  # 允许纵向扩展
-
-        # 提示块
-        tip_frame = ttk.LabelFrame(self.download_frame, text="可视化提示", padding=(10, 5))
-        tip_frame.pack(fill=tk.X, pady=10)
-
-        # 智能猜测按钮
-        smart_guess_btn = ttk.Button(
-            tip_frame,
-            text="智能猜测收件人",
-            command=self.smart_guess_receivers
-        )
-        smart_guess_btn.pack(anchor=tk.W, padx=5, pady=5)
-
-        tip_label = ttk.Label(
-            tip_frame,
-            text="点击打开可视化人际关系网络",
-            # foreground="#0099cc"
-        )
-        tip_label.pack(anchor=tk.W, padx=5, pady=5)
-
-        # 启动可视化按钮
-        open_vis_btn = ttk.Button(
-            tip_frame,
-            text="打开邮件网络可视化",
-            command=self.open_visualization_html
-        )
-        open_vis_btn.pack(anchor=tk.W, padx=5, pady=5)
-
-
-        
-        
-        # 按钮框架
-        button_frame = ttk.Frame(self.download_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        open_folder_btn = ttk.Button(button_frame, text="打开存储文件夹", 
-                                   command=self.open_storage_folder)
-        open_folder_btn.pack(side=tk.LEFT, padx=10)
-        
-        view_report_btn = ttk.Button(button_frame, text="查看下载报告", 
-                                   command=self.view_download_report)
-        view_report_btn.pack(side=tk.LEFT, padx=10)
-        
-        clear_log_btn = ttk.Button(button_frame, text="清除日志", 
-                                 command=self.clear_download_log)
-        clear_log_btn.pack(side=tk.RIGHT, padx=10)
-    
-    def initialize_app(self):
-        """初始化应用程序"""
-        # 检查配置是否有效
-        if not self.downloader.email_addr or not self.downloader.password or not self.downloader.imap_server:
-            messagebox.showinfo("首次使用", "请在'登录设置'选项卡中配置您的邮箱信息")
-    
-    def browse_directory(self):
-        """浏览并选择存储目录"""
-        from tkinter import filedialog
-        directory = filedialog.askdirectory(initialdir=self.storage_var.get())
-        if directory:
-            self.storage_var.set(directory)
-    
-    def save_settings(self):
-        """保存设置"""
-        try:
-            self.downloader.email_addr = self.email_var.get()
-            self.downloader.password = self.password_var.get()
-            self.downloader.imap_server = self.server_var.get()
-            self.downloader.timeout = int(self.timeout_var.get())
-            self.downloader.batch_size = int(self.batch_var.get())
-            
-            self.downloader.save_config()
-            messagebox.showinfo("成功", "设置已保存")
-        except Exception as e:
-            messagebox.showerror("错误", f"保存设置失败: {str(e)}")
-    
-    def test_connection(self):
-        """测试邮箱连接"""
-        # 更新配置
-        self.downloader.email_addr = self.email_var.get()
-        self.downloader.password = self.password_var.get()
-        self.downloader.imap_server = self.server_var.get()
-        
-        # 显示连接中...
-        self.status_var.set("连接中...")
-        self.root.update()
-        
-        # 尝试连接
-        success = self.downloader.connect_to_email()
-        
-        if success:
-            messagebox.showinfo("成功", "连接成功，邮箱登录验证通过")
-            self.status_var.set("就绪")
-            # 自动切换到“搜索邮件”选项卡，便于立即进行检索
-            try:
-                if hasattr(self, 'notebook'):
-                    # 以页面对象切换
-                    self.notebook.select(self.search_frame)
-            except Exception:
-                pass
-    
-            # 自动获取文件夹列表
-            self.refresh_folders()
-        else:
-            messagebox.showerror("错误", "连接失败，请检查邮箱设置")
-            self.status_var.set("连接失败")
-    
-    def refresh_folders(self):
-        """刷新邮箱文件夹列表"""
-        if not self.downloader.client:
-            if not self.downloader.connect_to_email():
-                messagebox.showerror("错误", "请先登录邮箱")
-                return
-        
-        # 显示正在获取...
-        self.status_var.set("正在获取文件夹...")
-        self.root.update()
-        
-        # 获取文件夹列表
-        folders = self.downloader.get_all_mailboxes()
-        
-        if folders:
-            self.folder_combo['values'] = folders
-            # 优先选 INBOX（126/163 常用），否则选第一个
-            idx = folders.index('INBOX') if 'INBOX' in folders else 0
-            self.folder_combo.current(idx)
-            self.status_var.set(f"已获取 {len(folders)} 个文件夹")
-        else:
-            self.status_var.set("获取文件夹失败")
-    
-    def clear_search(self):
-        """清除搜索条件"""
-        self.start_date_picker.delete(0, tk.END)
-        self.end_date_picker.delete(0, tk.END)
-        self.sender_var.set("")
-        self.recipient_var.set("")
-        self.subject_var.set("")
-        self.max_results_var.set("1500")
-    
-    def search_emails(self):
-        """搜索邮件"""
-        if not self.downloader.client:
-            if not self.downloader.connect_to_email():
-                messagebox.showerror("错误", "请先登录邮箱")
-                return
-        
-        # 获取搜索条件
-        folder = self.folder_var.get()
-        if not folder:
-            messagebox.showerror("错误", "请选择邮箱文件夹")
+            header.append(line)
+        self._inv_header_lines = header if data_start >= 0 else lines[:2]
+        if data_start < 0:
             return
-        if self.search_mode_var.get() == "config":
-            rule_num = int(self.rule_choice_var.get())
-            rule = self.downloader.get_default_rule(rule_num)
-            subject_pattern = rule.get('subject_pattern', '')
-            sender = rule.get('from', '')
-            recipient = rule.get('to', '')
-        else:
-            # 手动检索
-            subject_pattern = self.subject_var.get()
-            sender = self.sender_var.get()
-            recipient = self.recipient_var.get()
-        
-        # 处理日期
-        start_date = None
-        end_date = None
-        
-        if self.start_date_var.get():
-            try:
-                start_date = datetime.strptime(self.start_date_var.get(), '%Y-%m-%d')
-            except:
-                messagebox.showerror("错误", "起始日期格式错误")
-                return
-        
-        if self.end_date_var.get():
-            try:
-                end_date = datetime.strptime(self.end_date_var.get(), '%Y-%m-%d')
-            except:
-                messagebox.showerror("错误", "结束日期格式错误")
-                return
-        
-        # 获取最大结果数
-        try:
-            max_emails = int(self.max_results_var.get())
-            if max_emails <= 0:
-                max_emails = 1500
-        except:
-            max_emails = 1500
-        
-        # 清空当前结果
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-        
-        # 重置进度条
-        self.search_progress['value'] = 0
-        self.search_status_var.set("搜索中...")
-        self.root.update()
-        
-        # 创建并启动搜索线程
-        search_thread = threading.Thread(
-            target=self.run_search,
-            args=(folder, subject_pattern, sender, recipient, start_date, end_date, max_emails)
-        )
-        search_thread.daemon = True
-        search_thread.start()
-    
-    def run_search(self, folder, subject_pattern, sender, recipient, start_date, end_date, max_emails):
-        """在独立线程中运行搜索"""
-        try:
-            # 更新状态
-            def update_progress(progress, found_count):
-                self.search_progress['value'] = progress
-                self.search_status_var.set(f"搜索中... {progress}% 已找到 {found_count} 封")
-                self.root.update()
-            
-            # 执行搜索
-            results = self.downloader.search_emails_advanced(
-                folder=folder,
-                subject_pattern=subject_pattern,
-                from_address=sender,
-                to_address=recipient,
-                start_date=start_date,
-                end_date=end_date,
-                callback=update_progress,
-                max_emails=max_emails
+        for line in lines[data_start + 1:]:
+            cols = line.split("\t")
+            if len(cols) < 6:
+                continue
+            row = {
+                "direction": cols[0],
+                "date": cols[1],
+                "sender": cols[2],
+                "receiver": cols[3],
+                "letter_type": cols[4],
+                "path": cols[5],
+            }
+            self._inv_rows.append(row)
+            self.inv_tree.insert(
+                "",
+                tk.END,
+                values=(row["direction"], row["date"], row["sender"], row["receiver"], row["letter_type"], row["path"]),
             )
-            
-            # 存储结果用于后续下载
-            self.downloader.search_results = results
+        self.status_var.set(f"库存 {len(self._inv_rows)} 封")
 
-            # 若有未匹配项，主线程弹窗显示（可滚动）
-            unmatched = getattr(self.downloader, 'last_unmatched', []) or []
-            if unmatched:
-                def _show_unmatched():
-                    win = tk.Toplevel(self.root)
-                    win.title("未匹配邮件列表")
-                    win.geometry("700x420")
-                    txt = scrolledtext.ScrolledText(win, wrap=tk.WORD)
-                    txt.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
-                    header = f"未匹配邮件数量: {len(unmatched)}\n显示前 {min(300, len(unmatched))} 条：\n\n"
-                    txt.insert(tk.END, header + "\n".join(unmatched[:300]))
-                    txt.configure(state='disabled')
-                    # 模态
-                    try:
-                        win.transient(self.root)
-                        win.grab_set()
-                    except Exception:
-                        pass
-                self.root.after(0, _show_unmatched)
+    def _on_inv_select(self, _event=None):
+        sel = self.inv_tree.selection()
+        if not sel:
+            return
+        idx = self.inv_tree.index(sel[0])
+        if idx >= len(self._inv_rows):
+            return
+        row = self._inv_rows[idx]
+        self.inv_meta_var.set(f"{row['direction']}  {row['date']} ")
+        self.inv_sender_var.set(row["sender"])
+        self.inv_receiver_var.set(row["receiver"])
+        self.inv_type_var.set(row["letter_type"])
 
-            # 在主线程中更新界面
-            self.root.after(0, lambda: self.update_search_results(results))
-            
-        except Exception as e:
-            # 在主线程中显示错误
-            self.root.after(0, lambda: messagebox.showerror("错误", f"搜索时出错: {str(e)}"))
-            logger.error(f"搜索时出错: {str(e)}")
-            self.root.after(0, lambda: self.search_status_var.set("搜索失败"))
-    
-    def update_search_results(self, results):
-        """更新搜索结果到表格"""
-        # 清空当前结果
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-        
-        # 添加结果到表格
-        for i, email_info in enumerate(results):
-            # 处理日期显示
-            try:
-                if email_info.get('date_obj'):
-                    date_str = email_info['date_obj'].strftime("%Y-%m-%d %H:%M")
-                else:
-                    date_str = email_info['date'][:19] if email_info['date'] else "未知日期"
-            except:
-                date_str = str(email_info.get('date', "未知日期"))
-            
-            # 限制字段长度
-            sender = email_info['sender']
-            if len(sender) > 30:
-                sender = sender[:27] + "..."
-                
-            subject = email_info['subject']
-            if len(subject) > 50:
-                subject = subject[:47] + "..."
-            
-            self.results_tree.insert("", tk.END, values=(
-                i + 1,
-                date_str,
-                sender,
-                subject
-            ), tags=(str(i),))
-        
-        # 更新状态
-        self.search_status_var.set(f"找到 {len(results)} 封符合条件的邮件")
-        self.search_progress['value'] = 100
-    
-    def toggle_select_all(self):
-        """切换全选/取消全选"""
-        if self.select_all_var.get():
-            # 选择所有项
-            for item in self.results_tree.get_children():
-                self.results_tree.selection_add(item)
-        else:
-            # 取消选择所有项
-            for item in self.results_tree.get_children():
-                self.results_tree.selection_remove(item)
-    
-    def download_selected(self):
-        """下载选中的邮件"""
-        # 获取选中的项
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            messagebox.showinfo("提示", "请先选择需要下载的邮件")
+    def save_inventory_row(self):
+        sel = self.inv_tree.selection()
+        if not sel:
+            messagebox.showinfo("提示", "请先选一封信。")
             return
-        
-        # 获取选中的索引
-        selected_indices = []
-        for item in selected_items:
-            item_values = self.results_tree.item(item, "values")
-            if item_values:
-                selected_indices.append(int(item_values[0]) - 1)
-        
-        # 检查是否有结果
-        if not self.downloader.search_results:
-            messagebox.showerror("错误", "没有可下载的邮件")
+        idx = self.inv_tree.index(sel[0])
+        if idx >= len(self._inv_rows):
             return
-        
-        # 准备要下载的邮件
-        emails_to_download = [self.downloader.search_results[i] for i in selected_indices 
-                             if 0 <= i < len(self.downloader.search_results)]
-        
-        if not emails_to_download:
-            messagebox.showerror("错误", "选择的邮件不可用")
-            return
-        
-        # 切换到下载选项卡
-        self.root.nametowidget(".!frame.!notebook").select(2)  # 索引从0开始，下载选项卡是第3个
-        
-        # 重置下载进度
-        self.download_progress['value'] = 0
-        self.download_status_var.set(f"准备下载 {len(emails_to_download)} 封邮件...")
-        self.clear_download_log()
-        self.root.update()
-        
-        # 创建并启动下载线程
-        download_thread = threading.Thread(
-            target=self.run_download,
-            args=(emails_to_download,)
+        row = self._inv_rows[idx]
+        row["sender"] = self.inv_sender_var.get().strip()
+        row["receiver"] = self.inv_receiver_var.get().strip()
+        row["letter_type"] = self.inv_type_var.get().strip()
+        self.inv_tree.item(
+            sel[0],
+            values=(row["direction"], row["date"], row["sender"], row["receiver"], row["letter_type"], row["path"]),
         )
-        download_thread.daemon = True
-        download_thread.start()
+        self._write_inventory_tsv()
+        messagebox.showinfo("已保存", "修改已写入库存表。")
 
-    def run_download(self, emails):
-        """在独立线程中运行下载"""
-        try:
-            def update_progress(progress, current, total):
-                self.download_progress['value'] = progress
-                self.download_status_var.set(f"下载中... {progress}% ({current}/{total})")
-                self.root.update()
-                
-                # ✅ 修改：从实际处理过的邮件中获取状态
-                if current <= len(emails):
-                    email_info = emails[current - 1]
-                    status = email_info.get('status', '')
-                    reason = email_info.get('reason', '')
-                    
-                    if status == 'skipped':
-                        msg = f"[{current}/{total}] ⊙ 跳过: {email_info.get('subject', '')} ({reason})\n"
-                    elif status == 'failed':
-                        msg = f"[{current}/{total}] ✗ 失败: {email_info.get('subject', '')} ({reason})\n"
-                    elif status == 'success':
-                        msg = f"[{current}/{total}] ✓ 已下载: {email_info.get('subject', '')}\n"
-                    else:
-                        msg = f"[{current}/{total}] → 处理中: {email_info.get('subject', '')}\n"
-                    
-                    self.root.after(0, lambda m=msg: self.add_download_log(m))
-            
-            # 执行下载
-            results = self.downloader.download_multiple_emails(emails, update_progress)
-            
-            self.root.after(0, lambda: self.download_completed(results, len(emails)))
-        except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("错误", f"下载时出错: {str(e)}"))
-            logger.error(f"下载时出错: {str(e)}")
-            self.root.after(0, lambda: self.download_status_var.set("下载失败"))
-
-    def download_completed(self, results, total):
-        """下载完成后的处理"""
-        self.download_progress['value'] = 100
-        
-        success_count = len([r for r in results if r.get('status') == 'success'])
-        skipped_count = len([r for r in results if r.get('status') == 'skipped'])
-        failed_count = len([r for r in results if r.get('status') == 'failed'])
-        
-        self.download_status_var.set(f"下载完成: 成功{success_count} 跳过{skipped_count} 失败{failed_count}")
-        
-        # 添加摘要到日志
-        self.add_download_log("\n" + "="*50 + "\n")
-        self.add_download_log(f"下载完成摘要:\n")
-        self.add_download_log(f"总邮件数: {total}\n")
-        self.add_download_log(f"✓ 成功下载: {success_count}\n")
-        self.add_download_log(f"⊙ 跳过已有: {skipped_count}\n")
-        self.add_download_log(f"✗ 下载失败: {failed_count}\n")
-        self.add_download_log(f"存储目录: {self.downloader.base_dir}\n")
-        
-        # 失败详情
-        if failed_count > 0:
-            self.add_download_log("\n失败邮件详情:\n")
-            for r in results:
-                if r.get('status') == 'failed':
-                    self.add_download_log(f"  - {r['subject']}: {r.get('reason', '未知原因')}\n")
-        
-        self.add_download_log("\n下载报告已保存到存储目录。\n")
-        
-        # 显示通知
-        messagebox.showinfo("完成", f"下载完成\n成功: {success_count}\n跳过: {skipped_count}\n失败: {failed_count}")    
-     
-    def add_download_log(self, text):
-        """添加文本到下载日志"""
-        self.download_log.configure(state="normal")
-        self.download_log.insert(tk.END, text)
-        self.download_log.see(tk.END)  # 滚动到底部
-        self.download_log.configure(state="disabled")
-    
-    def clear_download_log(self):
-        """清空下载日志"""
-        self.download_log.configure(state="normal")
-        self.download_log.delete(1.0, tk.END)
-        self.download_log.configure(state="disabled")
-    
-    def open_storage_folder(self):
-        """打开存储文件夹"""
-        try:
-            import os
-            import platform
-            
-            path = str(self.downloader.base_dir)
-            
-            if platform.system() == "Windows":
-                os.startfile(path)
-            elif platform.system() == "Darwin":  # macOS
-                import subprocess
-                subprocess.Popen(["open", path])
-            else:  # Linux
-                import subprocess
-                subprocess.Popen(["xdg-open", path])
-                
-        except Exception as e:
-            messagebox.showerror("错误", f"无法打开文件夹: {str(e)}")
-    
-    def view_download_report(self):
-        """查看下载报告"""
-        report_path = self.downloader.base_dir / "download_report.txt"
-        
-        if not os.path.exists(report_path):
-            messagebox.showinfo("提示", "尚未生成下载报告")
-            return
-        
-        try:
-            # 显示报告内容
-            with open(report_path, "r", encoding="utf-8") as f:
-                report_text = f.read()
-            
-            # 创建对话框
-            report_dialog = tk.Toplevel(self.root)
-            report_dialog.title("下载报告")
-            report_dialog.geometry("700x500")
-            
-            # 添加文本框
-            report_text_widget = scrolledtext.ScrolledText(report_dialog, wrap=tk.WORD)
-            report_text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            report_text_widget.insert(tk.END, report_text)
-            report_text_widget.configure(state="disabled")
-            
-            # 添加关闭按钮
-            close_btn = ttk.Button(report_dialog, text="关闭", command=report_dialog.destroy)
-            close_btn.pack(pady=10)
-            
-            # 设置模态
-            report_dialog.transient(self.root)
-            report_dialog.grab_set()
-            self.root.wait_window(report_dialog)
-        except Exception as e:
-            messagebox.showerror("错误", f"无法打开下载报告: {str(e)}")
-        
-    def one_click_process(self):
-        """一键处理：自动调用现有函数（搜索 → 下载 → 猜测 → 可视化）"""
-        
-        # 检查连接状态
-        if not self.downloader.client:
-            if not self.downloader.connect_to_email():
-                messagebox.showerror("错误", "请先登录邮箱")
-                return
-        
-        # 检查文件夹选择
-        folder = self.folder_var.get()
-        if not folder:
-            messagebox.showerror("错误", "请先选择邮箱文件夹")
-            return
-        
-        # 确认操作
-        if not messagebox.askyesno(
-            "确认操作", 
-            "一键处理将执行以下操作：\n\n"
-            "1. 使用规则1和规则2搜索邮件\n"
-            "2. 自动下载所有搜索到的邮件\n"
-            "3. 智能猜测收件人\n"
-            "4. 打开可视化网络\n\n"
-            "此过程可能需要较长时间，是否继续？"
-        ):
-            return
-        
-        # 在独立线程中运行，避免阻塞UI
-        process_thread = threading.Thread(target=self._run_one_click_process)
-        process_thread.daemon = True
-        process_thread.start()
-
-
-    def _run_one_click_process(self):
-        """一键处理的实际执行逻辑（在独立线程中运行）"""
-        try:
-            # ===== 步骤1：规则1搜索（收信） =====
-            self.root.after(0, lambda: self.search_status_var.set("正在使用规则1搜索..."))
-            self.root.after(0, lambda: self.search_mode_var.set("config"))
-            self.root.after(0, lambda: self.rule_choice_var.set("1"))
-            self.root.after(0, self.toggle_search_mode)
-            
-            # ✅ 直接调用搜索逻辑（不通过UI事件）
-            folder = self.folder_var.get()
-            rule1 = self.downloader.get_default_rule(1)
-            
-            def update_progress_rule1(progress, found_count):
-                self.search_progress['value'] = progress / 2  # 占总进度的50%
-                self.search_status_var.set(f"[规则1] 搜索中... {progress}% 已找到 {found_count} 封")
-                self.root.update()
-            
-            results_rule1 = self.downloader.search_emails_advanced(
-                folder=folder,
-                subject_pattern=rule1.get('subject_pattern', ''),
-                from_address=rule1.get('from', ''),
-                to_address=rule1.get('to', ''),
-                callback=update_progress_rule1,
-                max_emails=1500
+    def _write_inventory_tsv(self):
+        path = self.downloader.base_dir / "global_result.tsv"
+        # 保留最新 OC 头
+        oc_line = "oc_registerdata\t" + ",".join(self.downloader.oc_registerdata)
+        groups = []
+        for main, subs in self.downloader.oc_aliases.items():
+            if subs:
+                groups.append(main + "=" + "=".join(subs))
+        lines_out = [oc_line]
+        if groups:
+            lines_out.append("oc_aliases\t" + ",".join(groups))
+        lines_out.append("收/发类型\t发信日期\t发件人\t收件人\t信件类型\t信件下载位置")
+        for row in self._inv_rows:
+            lines_out.append(
+                f"{row['direction']}\t{row['date']}\t{row['sender']}\t{row['receiver']}\t{row['letter_type']}\t{row['path']}"
             )
-            logger.info(f"规则1搜索完成，找到 {len(results_rule1)} 封邮件")
-            
-            # ===== 步骤2：规则2搜索（发信） =====
-            self.root.after(0, lambda: self.search_status_var.set("正在使用规则2搜索..."))
-            rule2 = self.downloader.get_default_rule(2)
-            
-            def update_progress_rule2(progress, found_count):
-                self.search_progress['value'] = 50 + progress / 2  # 占总进度的50%
-                self.search_status_var.set(f"[规则2] 搜索中... {progress}% 已找到 {found_count} 封")
-                self.root.update()
-            
-            results_rule2 = self.downloader.search_emails_advanced(
-                folder=folder,
-                subject_pattern=rule2.get('subject_pattern', ''),
-                from_address=rule2.get('from', ''),
-                to_address=rule2.get('to', ''),
-                callback=update_progress_rule2,
-                max_emails=1500
-            )
-            logger.info(f"规则2搜索完成，找到 {len(results_rule2)} 封邮件")
-            
-            # ===== 步骤3：合并结果并去重 =====
-            seen_ids = set()
-            merged_results = []
-            
-            for email_info in results_rule1 + results_rule2:
-                email_id = email_info.get('id')
-                if email_id not in seen_ids:
-                    seen_ids.add(email_id)
-                    merged_results.append(email_info)
-            
-            logger.info(f"合并后共 {len(merged_results)} 封邮件（去重后）")
-            
-            # 保存到 search_results
-            self.downloader.search_results = merged_results
-            
-            # 更新搜索结果显示
-            self.root.after(0, lambda: self.update_search_results(merged_results))
-            self.root.after(0, lambda: self.search_status_var.set(f"搜索完成，共找到 {len(merged_results)} 封邮件"))
-            
-            # ===== 步骤4：切换到下载选项卡 =====
-            self.root.after(0, lambda: self.notebook.select(self.download_frame))
-            time.sleep(0.3)  # 短暂等待UI切换
-            
-            # ===== 步骤5：自动下载所有邮件 =====
-            if not merged_results:
-                self.root.after(0, lambda: messagebox.showinfo("提示", "未找到符合条件的邮件"))
-                return
-            
-            self.root.after(0, lambda: self.download_status_var.set(f"准备下载 {len(merged_results)} 封邮件..."))
-            self.root.after(0, lambda: self.clear_download_log())
-            
-            def update_download_progress(progress, current, total):
-                self.download_progress['value'] = progress
-                self.download_status_var.set(f"下载中... {progress}% ({current}/{total})")
-                self.root.update()
-                
-                if current <= len(merged_results):
-                    email_info = merged_results[current - 1]
-                    status = email_info.get('status', '')
-                    reason = email_info.get('reason', '')
-                    
-                    if status == 'skipped':
-                        msg = f"[{current}/{total}] ⊙ 跳过: {email_info.get('subject', '')} ({reason})\n"
-                    elif status == 'failed':
-                        msg = f"[{current}/{total}] ✗ 失败: {email_info.get('subject', '')} ({reason})\n"
-                    elif status == 'success':
-                        msg = f"[{current}/{total}] ✓ 已下载: {email_info.get('subject', '')}\n"
-                    else:
-                        msg = f"[{current}/{total}] → 处理中: {email_info.get('subject', '')}\n"
-                    
-                    self.root.after(0, lambda m=msg: self.add_download_log(m))
-            
-            download_results = self.downloader.download_multiple_emails(merged_results, update_download_progress)
-            
-            success_count = len([r for r in download_results if r.get('status') == 'success'])
-            skipped_count = len([r for r in download_results if r.get('status') == 'skipped'])
-            failed_count = len([r for r in download_results if r.get('status') == 'failed'])
-            
-            self.root.after(0, lambda: self.download_status_var.set(f"下载完成: 成功{success_count} 跳过{skipped_count} 失败{failed_count}"))
-            
-            # ===== 步骤6：智能猜测收件人 =====
-            self.root.after(0, lambda: self.download_status_var.set("正在智能猜测收件人..."))
-            self.root.after(0, lambda: self.add_download_log("\n开始智能猜测收件人...\n"))
-            
-            # 调用智能猜测函数（在主线程中执行，因为它会弹窗）
-            self.root.after(0, self.smart_guess_receivers)
-            time.sleep(2)  # 等待猜测完成
-            
-            # ===== 步骤7：打开可视化HTML =====
-            self.root.after(0, lambda: self.download_status_var.set("正在打开可视化网络..."))
-            self.root.after(0, lambda: self.add_download_log("\n正在打开可视化网络...\n"))
-            
-            import webbrowser
-            root_dir = Path(self.root_dir_var.get())
-            html_path = root_dir / "visualization_private.html"
-            
-            if not html_path.exists():
-                self.root.after(0, lambda: messagebox.showwarning("警告", f"未找到可视化文件:\n{html_path}"))
+        path.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+
+    def open_selected_mail_folder(self):
+        sel = self.inv_tree.selection()
+        if not sel:
+            messagebox.showinfo("提示", "请先选一封信。")
+            return
+        idx = self.inv_tree.index(sel[0])
+        row = self._inv_rows[idx]
+        rel = row["path"]
+        if rel.startswith(".\\"):
+            rel = rel[2:]
+        folder = (script_dir / rel.replace("\\", os.sep)).resolve()
+        if not folder.exists():
+            messagebox.showerror("错误", f"找不到文件夹:\n{folder}")
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
             else:
-                url = "file:///" + str(html_path).replace("\\", "/")
-                webbrowser.open_new_tab(url)
-                self.root.after(0, lambda: self.add_download_log("✓ 可视化网络已打开\n"))
-            
-            # ===== 完成 =====
-            self.root.after(0, lambda: self.download_status_var.set("一键处理完成！"))
-            self.root.after(0, lambda: messagebox.showinfo("完成", "一键处理已完成！\n\n已自动打开可视化网络"))
-            
+                subprocess.Popen(["xdg-open", str(folder)])
         except Exception as e:
-            logger.error(f"一键处理出错: {e}")
-            self.root.after(0, lambda: messagebox.showerror("错误", f"一键处理失败: {str(e)}"))
-            self.root.after(0, lambda: self.download_status_var.set("一键处理失败"))
+            messagebox.showerror("错误", f"无法打开: {e}")
+
+    def open_storage_folder(self):
+        try:
+            path = str(self.downloader.base_dir)
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开文件夹: {e}")
+
 
 # 主程序入口
 def main():
@@ -2896,19 +3094,7 @@ def main():
             root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
-    
-    # 应用程序图标
-    try:
-        project_root = Path(os.path.dirname(os.path.abspath(__file__))).resolve()
-        icon_png = project_root / "icon" / "CrackPost_v1.png"
-        if icon_png.exists():
-            app_icon = tk.PhotoImage(file=str(icon_png))
-            root.iconphoto(True, app_icon)
-            # 保留引用
-            root._app_icon = app_icon
-    except Exception:
-        pass
-    
+
     # 运行应用程序
     root.mainloop()
 

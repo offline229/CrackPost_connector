@@ -14,6 +14,15 @@ CrackPost_connector 是为 CrackPost 企划组定制开发的个人用户通信�
 - 详细日志与下载报告，便于后续分析和溯源
 - 插件扩展点，支持自定义认证、格式化、传输策略
 
+## 打包（开发者）
+
+1. 安装 [Python 3](https://www.python.org/downloads/)（勾选 Add to PATH）。
+2. 在项目根目录**双击 `build.bat`**，或执行：`powershell -File build.ps1`
+3. 产物在 **`dist/`**：`download_gui.exe`、`visualization_private.html`、`font/`、`icon/`（可选 `guide/`）。  
+   首次运行会自动创建 `venv` 并安装 `requirements-build.txt` 中的依赖。
+
+与 `download_gui.py` 顶部注释中的 PyInstaller 参数一致；改源码后重新打包即可更新 exe。
+
 ## 快速开始
 
 1. 通过dist内程序打开gui，并按照提示说明下载文档。
