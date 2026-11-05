@@ -1,5 +1,44 @@
-import re
 from pathlib import Path
+
+def _resolve_email_dir(directory, tsv_path):
+    """把 global_result 里的信件路径解析成实际文件夹（兼容新旧目录名）。"""
+    if not directory:
+        return None
+    raw = str(directory).strip().strip('"')
+    if not raw:
+        return None
+
+    email_root = Path(tsv_path).resolve().parent          # .../email
+    project_root = email_root.parent                      # 项目根
+
+    p = Path(raw)
+    if p.is_absolute() and p.exists():
+        return p
+
+    rel = raw[2:] if raw.startswith(".\\") or raw.startswith("./") else raw
+    rel = rel.replace("\\", "/")
+
+    candidates = [
+        project_root / rel,
+        email_root / rel,
+    ]
+    # .\email\发\xxx → 再试 email_root/发/xxx
+    parts = Path(rel).parts
+    if parts and parts[0].lower() in ("email",):
+        candidates.append(email_root.joinpath(*parts[1:]))
+    # 仅给了 发\xxx 或 收\xxx
+    if parts and parts[0] in ("发", "收"):
+        candidates.append(email_root.joinpath(*parts))
+
+    for c in candidates:
+        try:
+            c = c.resolve()
+        except Exception:
+            continue
+        if c.exists() and c.is_dir():
+            return c
+    return None
+
 
 def extract_attachments_from_tsv(tsv_path):
     """
@@ -11,76 +50,66 @@ def extract_attachments_from_tsv(tsv_path):
     Returns:
         list: 包含附件信息的字典列表
     """
-    
-    # 读取 TSV 文件
+    tsv_path = Path(tsv_path)
     with open(tsv_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
-    
-    # 跳过前两行（OC注册信息 + 表头）
-    data_lines = lines[2:]
-    
+
+    # 兼容：oc_registerdata / 可选 oc_aliases / 表头 / 数据
+    data_start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("收/发类型") or line.startswith("收/发\t"):
+            data_start = i + 1
+            break
+    else:
+        # 旧假设：前两行是 OC + 表头
+        data_start = 2 if len(lines) >= 2 else 0
+
     results = []
-    
-    # 获取项目根目录（用于构建绝对路径）
-    project_root = Path(tsv_path).parent.parent
-    
-    for line in data_lines:
-        cols = line.strip().split('\t')
+    project_root = tsv_path.resolve().parent.parent
+
+    for line in lines[data_start:]:
+        cols = line.rstrip("\n").split('\t')
         if len(cols) < 6:
             continue
-        
+
         send_type = cols[0]
         date = cols[1]
         sender = cols[2]
         receiver = cols[3]
         letter_type = cols[4]
         directory = cols[5]
-        
-        # 构建邮件文件夹的绝对路径
-        if directory.startswith('.\\'):
-            rel_path = directory[2:]
-        else:
-            rel_path = directory
-        
-        email_dir = project_root / rel_path.replace('\\', '/')
-        
-        # 检查文件夹是否存在
-        if not email_dir.exists():
+
+        email_dir = _resolve_email_dir(directory, tsv_path)
+        if not email_dir:
             continue
-        
-        # 提取附件信息
+
         text_attachments = []
         file_attachments = []
-        
-        # 1. 检查 content.txt 中包含"附件"的行
+
+        # 1. content.txt 中含「附件」的行（文字附件登记）
         content_file = email_dir / "content.txt"
         if content_file.exists():
             try:
                 with open(content_file, 'r', encoding='utf-8') as f:
                     for line_content in f:
                         line_stripped = line_content.strip()
-                        # 如果这一行包含"附件"，就保存这一整行
                         if '附件' in line_stripped and line_stripped:
                             text_attachments.append(line_stripped)
-            
             except Exception as e:
                 print(f"读取 {content_file} 失败: {e}")
-        
-        # 2. 检查文件夹中的其他附件文件
+
+        # 2. 信夹内除 content.txt 外的文件
         try:
             for file in email_dir.iterdir():
                 if file.is_file() and file.name != 'content.txt':
-                    # 保存相对于项目根目录的路径
                     try:
-                        rel_file_path = file.relative_to(project_root)
+                        rel_file_path = file.resolve().relative_to(project_root)
                         file_attachments.append(str(rel_file_path).replace('\\', '/'))
                     except ValueError:
-                        # 如果无法获取相对路径，使用绝对路径
                         file_attachments.append(str(file))
         except Exception as e:
             print(f"读取文件夹 {email_dir} 失败: {e}")
-        
-        # 如果有任何附件（文字或文件），记录这封邮件
+
         if text_attachments or file_attachments:
             results.append({
                 'send_type': send_type,
@@ -92,7 +121,7 @@ def extract_attachments_from_tsv(tsv_path):
                 'text_attachments': text_attachments,
                 'file_attachments': file_attachments
             })
-    
+
     return results
 
 

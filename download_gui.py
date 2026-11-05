@@ -183,13 +183,39 @@ class EmailDownloader:
         self.oc_aliases = {}  # {主名: [别名, ...]}
         self.last_unmatched = []
         
-        # 添加超时设置
-        self.timeout = int(self.config.get('Connection', 'timeout', fallback='30'))
+        # 添加超时设置（弱网/大附件默认 300s；过短会导致 fetch 失败或整批卡死）
+        self.timeout = int(self.config.get('Connection', 'timeout', fallback='300'))
         self.batch_size = int(self.config.get('Connection', 'batch_size', fallback='100'))
+        self.cancel_requested = False
         self.crackpost_addrs = {
             'crackpost2@126.com',
             'crackpost@126.com',
         }
+
+    def request_cancel(self):
+        """协作式取消当前大批量下载（以已合法信件为准落盘）。
+        立刻丢弃 IMAP，避免卡在当前这封的 fetch/看门狗里「点了结束却不停」。
+        """
+        self.cancel_requested = True
+        try:
+            self._abandon_imap_client()
+        except Exception:
+            pass
+
+    def reset_cancel(self):
+        self.cancel_requested = False
+
+    def effective_imap_timeout(self):
+        return max(30, int(getattr(self, "timeout", 300) or 300))
+
+    def effective_email_watchdog(self):
+        """单封看门狗须 ≥ IMAP timeout，避免掐死本可成功的慢信。"""
+        t = self.effective_imap_timeout()
+        return max(t + 60, t * 2, 300)
+
+    def effective_noop_timeout(self):
+        t = self.effective_imap_timeout()
+        return min(60, max(20, t // 10))
 
     def direction_from_addresses(self, sender, recipients=None):
         """根据与 crackpost 中转站的关系判定收/发。发出去=发，收进来=收。"""
@@ -244,88 +270,203 @@ class EmailDownloader:
         """生成安全的文件名"""
         return re.sub(r'[\\/:*?"<>|]', '_', name)
 
-    def _expected_email_dir(self, email_info):
-        """根据邮件的发件人、日期和主题，生成本地存储的标准文件夹路径（以便比较是否保存过）"""
-        current_email = self.email_addr.lower()
-        sender = (email_info.get('sender') or '').strip()
-        send_type = "发" if sender.lower() == current_email else "收"
-
-        # 日期部分
-        date_folder = "unknown_date"
-        date_val = email_info.get('date_obj') or email_info.get('date')
+    def _parse_to_datetime(self, date_val):
+        """把 date_obj / 日期字符串解析为 datetime；失败返回 None。"""
+        if date_val is None or date_val == "":
+            return None
         try:
-            if hasattr(date_val, 'strftime'):
-                date_folder = date_val.strftime("%Y%m%d")
-            elif isinstance(date_val, str) and date_val:
+            if isinstance(date_val, datetime):
+                return date_val
+            if hasattr(date_val, 'strftime') and not isinstance(date_val, str):
+                return date_val
+            if isinstance(date_val, str):
                 try:
-                    dobj = email.utils.parsedate_to_datetime(date_val)
-                    date_folder = dobj.strftime("%Y%m%d")
+                    return email.utils.parsedate_to_datetime(date_val)
                 except Exception:
-                    m = re.search(r'(\d{4})[-/]?(\d{2})[-/]?(\d{2})', date_val)
-                    if m:
-                        date_folder = f"{m.group(1)}{m.group(2)}{m.group(3)}"
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y%m%d_%H%M%S", "%Y%m%d"):
+                        try:
+                            return datetime.strptime(date_val.strip(), fmt)
+                        except Exception:
+                            continue
         except Exception:
-            pass
+            return None
+        return None
 
+    def _date_folder_parts(self, date_val):
+        """返回 (day_folder, fine_folder)。
+        day: YYYYMMDD（旧格式）；fine: YYYYMMDD_HHMMSS（新格式，同日多封不撞车）。
+        使用邮件头墙钟时间（不转 UTC），与旧目录日份保持一致。
+        """
+        dt = self._parse_to_datetime(date_val)
+        if not dt:
+            if isinstance(date_val, str) and date_val:
+                m = re.search(r'(\d{4})[-/]?(\d{2})[-/]?(\d{2})', date_val)
+                if m:
+                    day = f"{m.group(1)}{m.group(2)}{m.group(3)}"
+                    return day, day
+            return "unknown_date", "unknown_date"
+        try:
+            day = dt.strftime("%Y%m%d")
+            fine = dt.strftime("%Y%m%d_%H%M%S")
+            return day, fine
+        except Exception:
+            return "unknown_date", "unknown_date"
+
+    def _send_type_for_email(self, sender):
+        current_email = self.email_addr.lower()
+        sender = (sender or '').strip()
+        return "发" if sender.lower() == current_email else "收"
+
+    def _expected_email_dir(self, email_info):
+        """新规范期望路径：发|收 / YYYYMMDD_HHMMSS_主题（同日同主题多封不冲突）。"""
+        send_type = self._send_type_for_email(email_info.get('sender'))
+        date_val = email_info.get('date_obj') or email_info.get('date')
+        _, fine = self._date_folder_parts(date_val)
         subject = (email_info.get('subject') or '')[:30]
         safe = self._safe_filename(subject)
-        email_dir = self.base_dir / send_type / f"{date_folder}_{safe}"
-        return email_dir
+        return self.base_dir / send_type / f"{fine}_{safe}"
 
-    def _email_already_downloaded(self, email_info):
-        """判断邮件是否已完整下载（仅检查本地文件）
-        
-        Args:
-            email_info: 邮件信息字典
-            
-        Returns:
-            tuple: (是否已下载, 目录路径, 原因)
+    def _content_date_matches(self, email_dir, email_info, tolerance_sec=2):
+        """用 content.txt 的「日期:」与当前邮件时间比对，确认是否同一封（避免同日同主题误判）。
+        允许极小误差（默认 2 秒），消化 IMAP envelope 与 Date 头的细微差异；
+        同日多封通常间隔远大于此，不会误并。用 timestamp 比较，兼容带时区差异。
         """
-        # 1. 计算预期存储路径
-        email_dir = self._expected_email_dir(email_info)
-        
-        # 2. 检查目录是否存在
+        content_file = Path(email_dir) / "content.txt"
+        if not content_file.exists():
+            return False
+        try:
+            with open(content_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith("日期:"):
+                        saved = line[len("日期:"):].strip()
+                        break
+                else:
+                    return False
+        except Exception:
+            return False
+
+        want_dt = self._parse_to_datetime(email_info.get('date_obj') or email_info.get('date'))
+        got_dt = self._parse_to_datetime(saved)
+        if not want_dt or not got_dt:
+            return False
+        # 1) 同一瞬间（处理好时区）
+        try:
+            if abs(want_dt.timestamp() - got_dt.timestamp()) <= tolerance_sec:
+                return True
+        except Exception:
+            pass
+        # 2) 墙钟一致（naive envelope 与带 +0800 的 Date 头常见组合）
+        try:
+            w = want_dt.replace(tzinfo=None)
+            g = got_dt.replace(tzinfo=None)
+            if abs((w - g).total_seconds()) <= tolerance_sec:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _dir_download_complete(self, email_dir, email_info):
+        """检查目录是否已有完整下载内容。返回 (ok, reason)。"""
+        email_dir = Path(email_dir)
         if not email_dir.exists():
-            return False, str(email_dir), "目录不存在"
-        
-        # 3. 检查 content.txt 是否存在
+            return False, "目录不存在"
+
         content_file = email_dir / "content.txt"
         if not content_file.exists():
-            return False, str(email_dir), "content.txt 不存在"
-        
-        # 4. 检查 content.txt 文件大小
+            return False, "content.txt 不存在"
+
         try:
-            file_size = content_file.stat().st_size
-            if file_size <= 100:
-                return False, str(email_dir), "content.txt 文件过小"
+            if content_file.stat().st_size <= 100:
+                return False, "content.txt 文件过小"
         except Exception as e:
-            return False, str(email_dir), f"检查文件大小失败: {e}"
-        
-        # 5. 检查必要字段
+            return False, f"检查文件大小失败: {e}"
+
         try:
             with open(content_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-                required_fields = ["主题:", "发件邮箱:", "收件邮箱:", "日期:"]
-                missing_fields = [field for field in required_fields if field not in content]
-                if missing_fields:
-                    return False, str(email_dir), f"content.txt 缺少字段: {', '.join(missing_fields)}"
+            required_fields = ["主题:", "发件邮箱:", "收件邮箱:", "日期:"]
+            missing = [field for field in required_fields if field not in content]
+            if missing:
+                return False, f"content.txt 缺少字段: {', '.join(missing)}"
         except Exception as e:
-            return False, str(email_dir), f"读取 content.txt 失败: {e}"
-        
-        # 6. 检查附件（如果标记有附件）
-        has_attachments = email_info.get('has_attachments', False)
-        if has_attachments:
-            # 统计非 content.txt 的文件数
+            return False, f"读取 content.txt 失败: {e}"
+
+        if email_info.get('has_attachments', False):
             try:
                 files_in_dir = [f for f in email_dir.iterdir() if f.is_file() and f.name != 'content.txt']
                 if not files_in_dir:
-                    return False, str(email_dir), "附件缺失"
+                    return False, "附件缺失"
             except Exception as e:
-                return False, str(email_dir), f"检查附件失败: {e}"
-        
-        # 7. 所有检查通过
-        logger.info(f"邮件已完整下载（本地验证）: {email_dir}")
-        return True, str(email_dir), "已完整（本地验证）"
+                return False, f"检查附件失败: {e}"
+
+        return True, "已完整（本地验证）"
+
+    def _candidate_email_dirs(self, email_info):
+        """新旧兼容候选目录：精确新路径、旧日级路径、以及同日同主题的其它细粒度目录。"""
+        send_type = self._send_type_for_email(email_info.get('sender'))
+        parent = self.base_dir / send_type
+        date_val = email_info.get('date_obj') or email_info.get('date')
+        day, fine = self._date_folder_parts(date_val)
+        subject = (email_info.get('subject') or '')[:30]
+        safe = self._safe_filename(subject)
+        suffix = f"_{safe}"
+
+        ordered = []
+        seen = set()
+
+        def _add(p):
+            key = str(p)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(Path(p))
+
+        _add(parent / f"{fine}_{safe}")
+        _add(parent / f"{day}_{safe}")
+
+        if parent.exists():
+            try:
+                for p in parent.iterdir():
+                    if not p.is_dir():
+                        continue
+                    name = p.name
+                    # 同日 + 同主题：旧 day_主题 / 新 day_HHMMSS_主题 / 撞车 day_HHMMSS_N_主题
+                    if name.endswith(suffix) and name.startswith(day):
+                        rest = name[: -len(suffix)] if suffix else name
+                        if rest == day or rest == fine or re.fullmatch(
+                            rf"{re.escape(day)}_\d{{6}}(?:_\d+)?", rest
+                        ):
+                            _add(p)
+            except Exception:
+                pass
+        return ordered
+
+    def _email_already_downloaded(self, email_info):
+        """判断邮件是否已完整下载（仅检查本地文件）。
+        新路径按秒区分同日多封；旧 YYYYMMDD_主题 目录仍可通过 content.txt 日期对上则视为已下载。
+        """
+        expected = self._expected_email_dir(email_info)
+        candidates = self._candidate_email_dirs(email_info)
+        last_reason = "目录不存在"
+        day, fine = self._date_folder_parts(
+            email_info.get('date_obj') or email_info.get('date')
+        )
+        subject = (email_info.get('subject') or '')[:30]
+        safe = self._safe_filename(subject)
+        legacy_name = f"{day}_{safe}"
+
+        for email_dir in candidates:
+            ok, reason = self._dir_download_complete(email_dir, email_info)
+            if not ok:
+                last_reason = reason
+                continue
+            # 无论新旧目录，都以 content.txt 日期确认是同一封（避免同日/同秒同主题误跳）
+            if self._content_date_matches(email_dir, email_info):
+                tag = "旧目录兼容" if email_dir.name == legacy_name else "本地验证"
+                logger.info(f"邮件已完整下载（{tag}）: {email_dir}")
+                return True, str(email_dir), f"已完整（{tag}）"
+            last_reason = "同日同主题目录存在但日期不匹配（视为另一封）"
+
+        return False, str(expected), last_reason
 
     # 这里的规则负责搜索，只要搜到即可
     def get_default_rule(self, rule_num=1):
@@ -423,7 +564,7 @@ class EmailDownloader:
             }
             
             config['Connection'] = {
-                'timeout': '30',
+                'timeout': '300',
                 'batch_size': '100'
             }
             
@@ -491,7 +632,7 @@ class EmailDownloader:
                 port=int(getattr(self, 'imap_port', 993)),
                 ssl=True,
                 ssl_context=ssl_context,
-                timeout=int(getattr(self, 'timeout', 30))
+                timeout=self.effective_imap_timeout()
             )
             self.client.normalise_times = False
 
@@ -843,6 +984,34 @@ class EmailDownloader:
 
     # ========== 1. 获取原始邮件数据 ==========
 
+    def _noop_with_timeout(self, timeout_sec=None):
+        """NOOP 检测；超时视为连接已死（弱网下 noop 也可能永远不返回）。"""
+        if not self.client:
+            return False
+        if timeout_sec is None:
+            timeout_sec = self.effective_noop_timeout()
+        box = {"ok": False, "err": None, "done": False}
+
+        def _run():
+            try:
+                self.client.noop()
+                box["ok"] = True
+            except Exception as e:
+                box["err"] = e
+            finally:
+                box["done"] = True
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout_sec)
+        if not box["done"]:
+            logger.warning(f"连接检测超时（>{timeout_sec}s），丢弃连接")
+            self._abandon_imap_client()
+            return False
+        if box["err"] is not None:
+            raise box["err"]
+        return box["ok"]
+
     def ensure_connected(self, max_retries=2, backoff=1):
         """确保 IMAP 连接可用；不可用时自动重连并重试（返回 True/False）"""
         for attempt in range(1, max_retries + 1):
@@ -855,16 +1024,12 @@ class EmailDownloader:
                         logger.warning("connect_to_email 失败")
                 else:
                     try:
-                        # 发送 NOOP 保活检测
-                        self.client.noop()
-                        return True
+                        if self._noop_with_timeout():
+                            return True
+                        # noop 超时已丢弃 client
                     except Exception as e:
                         logger.warning(f"连接检测失败（尝试 {attempt}/{max_retries}）：{e}")
-                        try:
-                            self.client.logout()
-                        except Exception:
-                            pass
-                        self.client = None
+                        self._abandon_imap_client()
                         if self.connect_to_email():
                             return True
             except Exception as e:
@@ -958,35 +1123,62 @@ class EmailDownloader:
         # 发件人
         metadata['sender'] = email.utils.parseaddr(msg['from'])[1]
         
-        # 日期
+        # 日期（新存盘用到秒，兼容同日多封；旧日级目录仍可由已下载检查识别）
         date_str = msg['date'] or ''
         metadata['date_str'] = date_str
         
         try:
             date_obj = email.utils.parsedate_to_datetime(date_str)
-            metadata['date_folder'] = date_obj.strftime("%Y%m%d")
-        except:
+            metadata['date_obj'] = date_obj
+            day, fine = self._date_folder_parts(date_obj)
+            metadata['date_folder'] = fine          # 新：YYYYMMDD_HHMMSS
+            metadata['date_folder_day'] = day       # 旧：YYYYMMDD
+        except Exception:
+            metadata['date_obj'] = None
             metadata['date_folder'] = "unknown_date"
+            metadata['date_folder_day'] = "unknown_date"
         
         return metadata
     
     # ========== 3. 确定存储目录 ==========
     def _determine_email_directory(self, metadata):
-        """确定邮件存储目录
+        """确定邮件存储目录（新：YYYYMMDD_HHMMSS_主题；若旧日级目录已是同一封则复用）。
         
         Returns:
             Path: 邮件存储目录路径
         """
-        current_email = self.email_addr.lower()
-        sender = metadata['sender']
-        send_type = "发" if sender.lower() == current_email else "收"
-        
-        subject = metadata['subject'][:30]
+        send_type = self._send_type_for_email(metadata.get('sender'))
+        subject = (metadata.get('subject') or '')[:30]
         safe_subject = self._safe_filename(subject)
-        
-        email_dir = self.base_dir / send_type / f"{metadata['date_folder']}_{safe_subject}"
+        fine = metadata.get('date_folder') or "unknown_date"
+        day = metadata.get('date_folder_day') or fine.split('_')[0]
+
+        email_info = {
+            'sender': metadata.get('sender'),
+            'subject': metadata.get('subject'),
+            'date': metadata.get('date_str'),
+            'date_obj': metadata.get('date_obj'),
+        }
+
+        # 若本地已有同一封（含旧 YYYYMMDD_主题），直接复用，避免重复建夹
+        already, existing, _ = self._email_already_downloaded(email_info)
+        if already and existing:
+            return Path(existing)
+
+        email_dir = self.base_dir / send_type / f"{fine}_{safe_subject}"
+        # 极端：同一秒同主题撞车且 content 不是同一封 → 加序号
+        if email_dir.exists() and not self._content_date_matches(email_dir, email_info):
+            n = 2
+            while True:
+                alt = self.base_dir / send_type / f"{fine}_{n}_{safe_subject}"
+                if not alt.exists() or self._content_date_matches(alt, email_info):
+                    email_dir = alt
+                    break
+                n += 1
+                if n > 99:
+                    break
+
         email_dir.mkdir(parents=True, exist_ok=True)
-        
         return email_dir
     
     # ========== 4. 解析收件人 ==========
@@ -1149,6 +1341,64 @@ class EmailDownloader:
         return True, None
     
     # ========== 9. 主流程协调器 ==========
+    def _abandon_imap_client(self):
+        """丢弃可能已卡死的 IMAP 连接（弱网下 fetch/noop 可能永不返回）。"""
+        client = self.client
+        self.client = None
+        if not client:
+            return
+        def _close():
+            try:
+                client.logout()
+            except Exception:
+                try:
+                    sock = getattr(getattr(client, "_imap", None), "sock", None)
+                    if sock:
+                        sock.close()
+                except Exception:
+                    pass
+        threading.Thread(target=_close, daemon=True).start()
+
+    def _download_email_with_timeout(self, email_id, folder, timeout_sec=None):
+        """带超时的单封下载。超时或用户取消则丢弃连接并返回失败，避免整批卡死。"""
+        if timeout_sec is None:
+            timeout_sec = self.effective_email_watchdog()
+        box = {"result": None, "error": None, "done": False}
+
+        def _run():
+            try:
+                res, err = self.download_email(email_id, folder)
+                box["result"], box["error"] = res, err
+            except Exception as e:
+                box["result"], box["error"] = None, str(e)
+            finally:
+                box["done"] = True
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        deadline = time.time() + max(1, float(timeout_sec))
+        while not box["done"]:
+            if self.cancel_requested:
+                logger.info(f"用户取消：中断当前下载 id={email_id}")
+                self._abandon_imap_client()
+                t.join(2)
+                return None, "用户取消"
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            t.join(min(0.4, remaining))
+
+        if not box["done"]:
+            logger.error(
+                f"下载超时（>{timeout_sec}s）id={email_id}，丢弃 IMAP 连接以免整批卡住"
+            )
+            self._abandon_imap_client()
+            t.join(2)
+            return None, f"下载超时（>{timeout_sec}s，弱网/大附件常见）"
+        if self.cancel_requested and not box["result"]:
+            return None, "用户取消"
+        return box["result"], box["error"]
+
     def download_email(self, email_id, folder):
         """下载单个邮件(主流程)
         
@@ -1160,37 +1410,24 @@ class EmailDownloader:
                 return None, "连接失败"
 
         try:
-            # 1. 获取原始邮件
             msg, error = self._fetch_raw_email(email_id, folder)
             if error:
                 return None, error
-            
-            # 2. 解析元数据
-            metadata = self._parse_email_metadata(msg)
-            
-            # 3. 确定存储目录
-            email_dir = self._determine_email_directory(metadata)
 
-            # 4. 解析收件人
+            metadata = self._parse_email_metadata(msg)
+            email_dir = self._determine_email_directory(metadata)
             to_addrs = self._parse_recipients(msg)
-            
-            # 5. 提取正文
             body_text = self._extract_email_body(msg)
-            
-            # 6. 下载附件
             attachment_paths, attachment_errors = self._download_attachments(msg, email_dir, email_id)
-            
-            # 7. 保存 content.txt
+
             success, error = self._save_content_file(email_dir, metadata, to_addrs, body_text)
             if not success:
                 return None, error
-            
-            # 8. 验证完整性
+
             success, error = self._validate_download(email_dir, attachment_errors)
             if not success:
                 return None, error
-            
-            # 9. 构建结果
+
             result = {
                 'subject': metadata['subject'],
                 'sender': metadata['sender'],
@@ -1201,7 +1438,7 @@ class EmailDownloader:
                 'attachments': attachment_paths,
                 'to_addrs': to_addrs
             }
-            
+
             logger.info(f"处理完成: {metadata['subject']}")
             return result, None
 
@@ -1210,136 +1447,209 @@ class EmailDownloader:
             logger.error(error_msg)
             return None, error_msg
 
-    def download_multiple_emails(self, email_list, progress_callback=None, max_retries=2):
-        """下载多封邮件，支持智能跳过和详细错误报告"""
+    def download_multiple_emails(
+        self,
+        email_list,
+        progress_callback=None,
+        soft_attempts=2,
+        hard_attempts=10,
+        mid_phase_callback=None,
+        on_result_callback=None,
+    ):
+        """两阶段下载：主轮每封最多 soft 次后暂挂 → 中期落盘 → 后台补到 hard 次。
+
+        progress_callback(progress, current, total, email_info)
+        mid_phase_callback(results, deferred_list, failed_details, cancelled) — 主轮结束时
+        on_result_callback(results, failed_details, stage) — 后台每成功一封可用来增量落盘
+        """
+        self.reset_cancel()
         results = []
         total = len(email_list)
-        succeeded_ids = set()  # 真正下载成功的
-        skipped_ids = set()    # 跳过的
+        index_by_id = {e['id']: i for i, e in enumerate(email_list)}
+        succeeded_ids = set()
+        skipped_ids = set()
+        attempt_count = {e['id']: 0 for e in email_list}
         failed_details = []
+        eff_timeout = self.effective_email_watchdog()
+        soft_attempts = max(1, int(soft_attempts))
+        hard_attempts = max(soft_attempts, int(hard_attempts))
 
-        # 第一轮：检查+下载
-        for i, email_info in enumerate(email_list):
+        def _cancelled():
+            return bool(self.cancel_requested)
+
+        def _attach_user_overrides(email_info, res):
+            for key in ('user_letter_type', 'user_sender_name', 'user_receiver_name', 'user_direction'):
+                if email_info.get(key):
+                    res[key] = email_info[key]
+            return res
+
+        def _notify(email_info, status, reason="", attempt=None):
+            email_info['status'] = status
+            email_info['reason'] = reason
+            if attempt is not None:
+                email_info['attempt'] = attempt
+            if not progress_callback:
+                return
+            idx = index_by_id.get(email_info['id'], 0)
+            done = len(succeeded_ids) + len(skipped_ids)
+            current = min(total, max(done, idx + 1))
+            progress = int(current / total * 100) if total else 100
+            progress_callback(progress, current, total, email_info)
+
+        def _mark_skip(email_info, email_dir, reason):
+            eid = email_info['id']
+            if eid in succeeded_ids or eid in skipped_ids:
+                return
+            results.append(_attach_user_overrides(email_info, {
+                'subject': email_info.get('subject', ''),
+                'sender': email_info.get('sender', ''),
+                'date': email_info.get('date', ''),
+                'has_attachments': False,
+                'directory': email_dir,
+                'attachment_count': 0,
+                'attachments': [],
+                'to_addrs': [],
+                'status': 'skipped',
+                'reason': reason
+            }))
+            skipped_ids.add(eid)
+
+        def _mark_success(email_info, result, reason):
+            eid = email_info['id']
+            if eid in succeeded_ids or eid in skipped_ids:
+                return
+            result['status'] = 'success'
+            result['reason'] = reason
+            results.append(_attach_user_overrides(email_info, result))
+            succeeded_ids.add(eid)
+
+        def _upsert_fail(email_id, subject, error):
+            for fd in failed_details:
+                if fd['id'] == email_id:
+                    fd['error'] = error
+                    fd['attempts'] = attempt_count.get(email_id, 0)
+                    return
+            failed_details.append({
+                'id': email_id,
+                'subject': subject,
+                'error': error,
+                'attempts': attempt_count.get(email_id, 0),
+            })
+
+        def _clear_fail(email_id):
+            nonlocal failed_details
+            failed_details = [f for f in failed_details if f['id'] != email_id]
+
+        def _try_once(email_info, attempt_no, label_prefix):
+            """尝试一次下载；返回 'success'|'skipped'|'fail'。"""
             email_id = email_info['id']
             folder = email_info['folder']
-
-            def _attach_user_overrides(res):
-                for key in ('user_letter_type', 'user_sender_name', 'user_receiver_name', 'user_direction'):
-                    if email_info.get(key):
-                        res[key] = email_info[key]
-                return res
-
-            # 判断是否已完整下载
             already, email_dir, reason = self._email_already_downloaded(email_info)
             if already:
-                logger.info(f"✓ 跳过已下载邮件 id={email_id} 主题={email_info.get('subject')}")
-                results.append(_attach_user_overrides({
-                    'subject': email_info.get('subject', ''),
-                    'sender': email_info.get('sender', ''),
-                    'date': email_info.get('date', ''),
-                    'has_attachments': False,
-                    'directory': email_dir,
-                    'attachment_count': 0,
-                    'attachments': [],
-                    'to_addrs': [],
-                    'status': 'skipped',
-                    'reason': reason
-                }))
-                skipped_ids.add(email_id)  # ✅ 修改：单独记录跳过的
+                _mark_skip(email_info, email_dir, reason)
+                _notify(email_info, 'skipped', reason, attempt=attempt_no)
+                return 'skipped'
+
+            if attempt_no <= 1:
+                _notify(email_info, 'processing', '处理中', attempt=attempt_no)
             else:
-                # 需要下载
-                logger.info(f"→ 开始下载 id={email_id} 主题={email_info.get('subject')} (原因: {reason})")
-                result, error = self.download_email(email_id, folder)
-                if result:
-                    result['status'] = 'success'
-                    result['reason'] = '下载成功'
-                    results.append(_attach_user_overrides(result))
-                    succeeded_ids.add(email_id)  # ✅ 只记录真正下载成功的
-                    logger.info(f"✓ 下载成功 id={email_id}")
-                else:
-                    logger.warning(f"✗ 下载失败 id={email_id}: {error}")
-                    failed_details.append({
-                        'id': email_id,
-                        'subject': email_info.get('subject', ''),
-                        'error': error
-                    })
+                _notify(email_info, 'retry', f'{label_prefix}{attempt_no}', attempt=attempt_no)
 
-            if progress_callback:
-                progress = int((i + 1) / total * 100)
-                # ✅ 修改：更新进度时传递当前邮件的状态
-                email_info['status'] = 'skipped' if email_id in skipped_ids else ('success' if email_id in succeeded_ids else '')
-                email_info['reason'] = results[-1].get('reason', '') if results else ''
-                progress_callback(progress, i + 1, total)
+            res, error = self._download_email_with_timeout(
+                email_id, folder, timeout_sec=eff_timeout
+            )
+            if res:
+                _mark_success(email_info, res, f'{label_prefix}{attempt_no}成功' if attempt_no > 1 else '下载成功')
+                _clear_fail(email_id)
+                _notify(email_info, 'success', email_info.get('reason', '已下载'), attempt=attempt_no)
+                return 'success'
 
-            if i < total - 1:
+            already2, email_dir2, reason2 = self._email_already_downloaded(email_info)
+            if already2:
+                _mark_skip(email_info, email_dir2, reason2)
+                _clear_fail(email_id)
+                _notify(email_info, 'skipped', reason2, attempt=attempt_no)
+                return 'skipped'
+
+            _upsert_fail(email_id, email_info.get('subject', ''), error or '失败')
+            return 'fail'
+
+        # ---------- 主轮：每封最多 soft_attempts 次，失败则暂挂 ----------
+        deferred = []
+        for i, email_info in enumerate(email_list):
+            if _cancelled():
+                logger.info("用户取消：主轮提前结束")
+                break
+            email_id = email_info['id']
+            already, email_dir, reason = self._email_already_downloaded(email_info)
+            if already:
+                logger.info(f"✓ 跳过已下载 id={email_id}")
+                _mark_skip(email_info, email_dir, reason)
+                _notify(email_info, 'skipped', reason, attempt=0)
+                continue
+
+            ok = False
+            for attempt_no in range(1, soft_attempts + 1):
+                if _cancelled():
+                    break
+                attempt_count[email_id] = attempt_no
+                logger.info(
+                    f"→ 主轮尝试{attempt_no}/{soft_attempts} id={email_id} "
+                    f"主题={email_info.get('subject')}"
+                )
+                if attempt_no > 1:
+                    self._abandon_imap_client()
+                    if not self.ensure_connected():
+                        _upsert_fail(email_id, email_info.get('subject', ''), '重连失败')
+                        _notify(email_info, 'retry', f'失败重试{attempt_no}', attempt=attempt_no)
+                        time.sleep(1.0)
+                        continue
+                outcome = _try_once(email_info, attempt_no, '失败重试')
+                if _cancelled():
+                    break
+                if outcome in ('success', 'skipped'):
+                    ok = True
+                    break
+                _notify(email_info, 'retry', f'失败重试{attempt_no}', attempt=attempt_no)
+                # 可中断等待，避免点了「以当前进度结束」仍干等重试间隔
+                wait_left = 0.8 if attempt_no < soft_attempts else 0.3
+                while wait_left > 0 and not _cancelled():
+                    step = min(0.2, wait_left)
+                    time.sleep(step)
+                    wait_left -= step
+            if not ok and email_id not in succeeded_ids and email_id not in skipped_ids:
+                _notify(email_info, 'deferred', f'暂挂（已试{soft_attempts}次）', attempt=soft_attempts)
+                deferred.append(email_info)
+            if i < total - 1 and not _cancelled():
                 time.sleep(0.3)
 
-        # 重试失败的项
-        failed_list = [e for e in email_list if e['id'] not in succeeded_ids and e['id'] not in skipped_ids]
-        attempt = 0
-        while failed_list and attempt < max_retries:
-            attempt += 1
-            logger.info(f"\n【第 {attempt} 轮重试】待重试数: {len(failed_list)}")
-            
-            for email_info in list(failed_list):
-                email_id = email_info['id']
-                folder = email_info['folder']
-                
-                # 再次检查
-                already, email_dir, reason = self._email_already_downloaded(email_info)
-                def _attach_ov(res):
-                    for key in ('user_letter_type', 'user_sender_name', 'user_receiver_name', 'user_direction'):
-                        if email_info.get(key):
-                            res[key] = email_info[key]
-                    return res
-
-                if already:
-                    logger.info(f"[重试{attempt}] ✓ 已有有效内容 id={email_id}")
-                    results.append(_attach_ov({
-                        'subject': email_info.get('subject', ''),
-                        'sender': email_info.get('sender', ''),
-                        'date': email_info.get('date', ''),
-                        'has_attachments': False,
-                        'directory': email_dir,
-                        'attachment_count': 0,
-                        'attachments': [],
-                        'to_addrs': [],
-                        'status': 'skipped',
-                        'reason': reason
-                    }))
-                    failed_list.remove(email_info)
-                    skipped_ids.add(email_id)
-                    # 从失败列表中移除
-                    failed_details = [f for f in failed_details if f['id'] != email_id]
+        # 用户取消时：把未处理完且本地仍不完整的也算暂挂（不再主轮硬失败）
+        if _cancelled():
+            for email_info in email_list:
+                eid = email_info['id']
+                if eid in succeeded_ids or eid in skipped_ids:
                     continue
+                if email_info not in deferred:
+                    deferred.append(email_info)
+                    _notify(email_info, 'deferred', '任务已提前结束', attempt=attempt_count.get(eid, 0))
 
-                # 重新下载
-                res, error = self.download_email(email_id, folder)
-                if res:
-                    res['status'] = 'success'
-                    res['reason'] = f'重试{attempt}成功'
-                    results.append(_attach_ov(res))
-                    failed_list.remove(email_info)
-                    succeeded_ids.add(email_id)
-                    # 更新失败列表
-                    for fd in failed_details:
-                        if fd['id'] == email_id:
-                            failed_details.remove(fd)
-                            break
-                    logger.info(f"[重试{attempt}] ✓ 成功 id={email_id}")
-                else:
-                    logger.warning(f"[重试{attempt}] ✗ 仍失败 id={email_id}: {error}")
-                    # 更新错误信息
-                    for fd in failed_details:
-                        if fd['id'] == email_id:
-                            fd['error'] = f"重试{attempt}后仍失败: {error}"
-                            break
-                time.sleep(0.5)
+        cancelled = _cancelled()
+        logger.info(
+            f"主轮结束：成功{len(succeeded_ids)} 跳过{len(skipped_ids)} "
+            f"暂挂{len(deferred)} 取消={cancelled}"
+        )
+        if mid_phase_callback:
+            try:
+                mid_phase_callback(list(results), list(deferred), list(failed_details), cancelled)
+            except Exception as e:
+                logger.error(f"中期回调失败: {e}")
 
-        # 标记最终失败的项
-        if failed_list:
-            logger.error(f"\n【最终失败】{len(failed_list)} 封邮件无法下载")
-            for email_info in failed_list:
+        if cancelled:
+            # 提前结束：不再后台补下
+            for email_info in deferred:
+                if email_info['id'] in succeeded_ids or email_info['id'] in skipped_ids:
+                    continue
+                email_info['status'] = 'failed'
                 results.append({
                     'subject': email_info.get('subject', ''),
                     'sender': email_info.get('sender', ''),
@@ -1350,36 +1660,136 @@ class EmailDownloader:
                     'attachments': [],
                     'to_addrs': [],
                     'status': 'failed',
-                    'reason': '多次重试后失败'
+                    'reason': '任务提前结束，未完成',
                 })
+                _notify(email_info, 'failed', '提前结束未完成')
+            return {
+                'results': results,
+                'failed_details': failed_details,
+                'deferred': [],
+                'cancelled': True,
+                'final_failed': deferred,
+            }
 
-        # ✅ 修改：统计更清晰
-        success_count = len(succeeded_ids)
-        skipped_count = len(skipped_ids)
-        failed_count = len(failed_list)
+        # ---------- 后台补下：累计到 hard_attempts ----------
+        still = list(deferred)
+        while still and not _cancelled():
+            progressed = False
+            self._abandon_imap_client()
+            if not self.ensure_connected():
+                logger.warning("后台补下：无法重连，稍后重试")
+                wait_left = 3.0
+                while wait_left > 0 and not _cancelled():
+                    step = min(0.25, wait_left)
+                    time.sleep(step)
+                    wait_left -= step
+                continue
 
-        # 生成详细报告
-        summary = f"\n\n{'='*60}\n下载汇总:\n✓ 成功: {success_count} 封\n⊙ 跳过: {skipped_count} 封\n✗ 失败: {failed_count} 封\n{'='*60}\n"
-        logger.info(summary)
+            for email_info in list(still):
+                if _cancelled():
+                    break
+                email_id = email_info['id']
+                if email_id in succeeded_ids or email_id in skipped_ids:
+                    still.remove(email_info)
+                    continue
+                next_attempt = attempt_count.get(email_id, soft_attempts) + 1
+                if next_attempt > hard_attempts:
+                    continue
+                attempt_count[email_id] = next_attempt
+                logger.info(
+                    f"→ 后台补下 尝试{next_attempt}/{hard_attempts} id={email_id} "
+                    f"主题={email_info.get('subject')}"
+                )
+                outcome = _try_once(email_info, next_attempt, '失败重试')
+                if _cancelled():
+                    break
+                if outcome in ('success', 'skipped'):
+                    still.remove(email_info)
+                    progressed = True
+                    if on_result_callback:
+                        try:
+                            on_result_callback(list(results), list(failed_details), 'background')
+                        except Exception as e:
+                            logger.error(f"增量落盘回调失败: {e}")
+                else:
+                    _notify(email_info, 'retry', f'失败重试{next_attempt}', attempt=next_attempt)
+                wait_left = 2.0
+                while wait_left > 0 and not _cancelled():
+                    step = min(0.25, wait_left)
+                    time.sleep(step)
+                    wait_left -= step
 
-        # 失败详情
-        if failed_details:
-            logger.error("\n失败详情:")
-            for fd in failed_details:
-                logger.error(f"  - [{fd['id']}] {fd['subject']}: {fd['error']}")
+            # 去掉已达上限的
+            remain = []
+            for email_info in still:
+                if attempt_count.get(email_info['id'], 0) >= hard_attempts:
+                    email_info['status'] = 'failed'
+                    results.append({
+                        'subject': email_info.get('subject', ''),
+                        'sender': email_info.get('sender', ''),
+                        'date': email_info.get('date', ''),
+                        'has_attachments': False,
+                        'directory': 'FAILED',
+                        'attachment_count': 0,
+                        'attachments': [],
+                        'to_addrs': [],
+                        'status': 'failed',
+                        'reason': f'多次尝试后失败（{hard_attempts}次）',
+                    })
+                    _notify(email_info, 'failed', f'失败(已达{hard_attempts}次)', attempt=hard_attempts)
+                else:
+                    remain.append(email_info)
+            still = remain
+            if not still:
+                break
+            if not progressed:
+                time.sleep(2.5)
 
-        # 生成报告
-        self.generate_download_report(results, email_list, failed_details)
+        final_failed = [
+            e for e in email_list
+            if e['id'] not in succeeded_ids and e['id'] not in skipped_ids
+        ]
+        for email_info in final_failed:
+            if email_info.get('status') != 'failed':
+                email_info['status'] = 'failed'
+                results.append({
+                    'subject': email_info.get('subject', ''),
+                    'sender': email_info.get('sender', ''),
+                    'date': email_info.get('date', ''),
+                    'has_attachments': False,
+                    'directory': 'FAILED',
+                    'attachment_count': 0,
+                    'attachments': [],
+                    'to_addrs': [],
+                    'status': 'failed',
+                    'reason': f'多次尝试后失败（{hard_attempts}次）',
+                })
+                _notify(email_info, 'failed', f'失败(已达{hard_attempts}次)')
 
-        return results
+        logger.info(
+            f"下载结束：成功{len(succeeded_ids)} 跳过{len(skipped_ids)} "
+            f"最终失败{len(final_failed)}"
+        )
+        return {
+            'results': results,
+            'failed_details': failed_details,
+            'deferred': deferred,
+            'cancelled': bool(self.cancel_requested),
+            'final_failed': final_failed,
+        }
     
 
     # 所有涉及收发件人推断的操作在此步进行
-    def generate_download_report(self, results, email_list, failed_details=None):
-        """生成报告，TSV 去重，记录失败详情"""
+    def generate_download_report(self, results, email_list, failed_details=None, stage="最终汇总"):
+        """生成报告，TSV 去重，记录失败详情。仅登记合法结果（跳过 status=failed）。"""
         report_path = self.base_dir / "download_report.txt"
         global_result_path = self.base_dir / "global_result.tsv"
         current_email = self.email_addr.lower()
+        # 过滤：失败项不写 TSV；目录必须像本地路径
+        results = [
+            r for r in (results or [])
+            if r.get('status') != 'failed' and r.get('directory') not in (None, '', 'FAILED')
+        ]
 
         # 1. 读取已有 TSV
         existing_oc = set()
@@ -1541,17 +1951,17 @@ class EmailDownloader:
 
         # 6. 写入下载报告
         with open(report_path, "w", encoding="utf-8") as f:
-            f.write("邮件下载报告\n")
+            f.write(f"邮件下载报告（{stage}）\n")
             f.write("=" * 50 + "\n\n")
             f.write(f"下载时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"总邮件数: {len(email_list)}\n")
+            f.write(f"阶段: {stage}\n")
+            f.write(f"总邮件数: {len(email_list or [])}\n")
             f.write(f"成功下载: {len([r for r in results if r.get('status') == 'success'])}\n")
             f.write(f"跳过已有: {len([r for r in results if r.get('status') == 'skipped'])}\n")
-            f.write(f"下载失败: {len([r for r in results if r.get('status') == 'failed'])}\n")
+            f.write(f"仍在失败/暂挂: {len(failed_details or [])}\n")
             f.write(f"跳过重复: {duplicate_count}\n")
             f.write(f"存储目录: {self.base_dir}\n\n")
-            
-            # 成功列表
+
             f.write("成功下载的邮件:\n")
             f.write("-" * 50 + "\n")
             for i, result in enumerate([r for r in results if r.get('status') == 'success']):
@@ -1559,28 +1969,53 @@ class EmailDownloader:
                 f.write(f"   发件邮箱: {result['sender']}\n")
                 f.write(f"   日期: {result['date']}\n")
                 f.write(f"   保存位置: {result['directory']}\n")
-                if result['has_attachments']:
+                if result.get('has_attachments'):
                     f.write(f"   附件数量: {result['attachment_count']}\n")
                 f.write(f"   原因: {result.get('reason', '')}\n\n")
-            
-            # 跳过列表
+
             f.write("\n跳过的邮件:\n")
             f.write("-" * 50 + "\n")
             for i, result in enumerate([r for r in results if r.get('status') == 'skipped']):
                 f.write(f"{i+1}. {result['subject']}\n")
                 f.write(f"   原因: {result.get('reason', '')}\n\n")
-            
-            # 失败详情
+
             if failed_details:
-                f.write("\n失败的邮件（详细）:\n")
+                f.write("\n失败/暂挂的邮件（详细）:\n")
                 f.write("-" * 50 + "\n")
                 for i, fd in enumerate(failed_details):
                     f.write(f"{i+1}. [{fd['id']}] {fd['subject']}\n")
-                    f.write(f"   错误原因: {fd['error']}\n\n")
+                    f.write(f"   错误原因: {fd['error']}\n")
+                    if fd.get('attempts'):
+                        f.write(f"   已尝试: {fd['attempts']} 次\n")
+                    f.write("\n")
 
         logger.info(f"全局结果已生成: {global_result_path}")
-        logger.info(f"下载报告已生成: {report_path}")
+        logger.info(f"下载报告已生成: {report_path}（{stage}）")
+        # 可视化读的是 attachment_report.tsv；入库后必须同步刷新，否则新附件不显示
+        self.regenerate_attachment_report()
         return report_path
+
+    def regenerate_attachment_report(self):
+        """根据 global_result.tsv 扫描各信夹，重写 email/attachment_report.tsv（供可视化附件柜使用）。"""
+        global_result_path = self.base_dir / "global_result.tsv"
+        out_path = self.base_dir / "attachment_report.tsv"
+        if not global_result_path.exists():
+            logger.warning("无 global_result.tsv，跳过附件报告生成")
+            return None
+        try:
+            from uitl_test import extract_attachments_from_tsv, save_attachment_report
+            results = extract_attachments_from_tsv(global_result_path)
+            save_attachment_report(results, out_path)
+            n_files = sum(len(r.get('file_attachments') or []) for r in results)
+            n_text = sum(len(r.get('text_attachments') or []) for r in results)
+            logger.info(
+                f"附件报告已更新: {out_path}（{len(results)} 封含附件，"
+                f"文件 {n_files} / 文字行 {n_text}）"
+            )
+            return out_path
+        except Exception as e:
+            logger.error(f"生成附件报告失败: {e}")
+            return None
 
 
 class EmailDownloaderGUI:
@@ -2185,6 +2620,10 @@ class EmailDownloaderGUI:
         foot.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(foot, text="打开日志文件夹", command=self.open_log_folder).pack(side=tk.LEFT)
         ttk.Button(foot, text="查看下载报告", command=self.view_download_report).pack(side=tk.LEFT, padx=6)
+        self.cancel_download_btn = ttk.Button(
+            foot, text="以当前进度结束", command=self.cancel_download_pipeline, state=tk.DISABLED
+        )
+        self.cancel_download_btn.pack(side=tk.LEFT, padx=6)
         ttk.Button(foot, text="再次打开[地缝可视化]", command=self.open_visualization_html).pack(side=tk.RIGHT)
 
     def _goto_download_page(self):
@@ -2696,55 +3135,220 @@ class EmailDownloaderGUI:
             messagebox.showerror("错误", "请先登录。")
             return
         self.busy = True
+        self._mid_flushed = False
         self.work_progress["value"] = 0
         self.work_status_var.set(f"准备下载 {len(queue)} 封…")
         self.clear_work_log()
+        try:
+            self.cancel_download_btn.configure(state=tk.NORMAL)
+        except Exception:
+            pass
         threading.Thread(target=self._run_download_pipeline, args=(queue,), daemon=True).start()
 
+    def cancel_download_pipeline(self):
+        if not self.busy:
+            return
+        self.downloader.request_cancel()
+        self.work_status_var.set("正在以当前进度结束…（只保留已完整的信件）")
+        self.add_work_log("\n—— 用户选择：以当前进度结束 ——\n")
+
+    def _status_label(self, status, attempt=None):
+        if status == "skipped":
+            return "跳过"
+        if status == "failed":
+            return "失败"
+        if status == "success":
+            return "已下载"
+        if status == "deferred":
+            return "暂挂待后台"
+        if status == "retry":
+            n = attempt or ""
+            return f"失败重试{n}" if n != "" else "失败重试"
+        if status == "processing":
+            return "处理中"
+        return "处理中"
+
+    def upsert_work_log_mail(self, mail_key, shown, total, status, subject, attempt=None):
+        """按邮件 id 就地翻新详细记录行（修复重试成功后仍显示处理中）。"""
+        label = self._status_label(status, attempt)
+        msg = f"[{shown}/{total}] {label}: {subject}\n"
+        tag = f"mail_{mail_key}"
+
+        def _ui():
+            self.work_log.configure(state="normal")
+            ranges = self.work_log.tag_ranges(tag)
+            if ranges:
+                self.work_log.delete(ranges[0], ranges[1])
+                self.work_log.insert(ranges[0], msg, tag)
+            else:
+                self.work_log.insert(tk.END, msg, tag)
+            self.work_log.see(tk.END)
+            self.work_log.configure(state="disabled")
+
+        self.root.after(0, _ui)
+
+    def _flush_download_artifacts(self, results, queue, failed_details, stage, open_viz=False):
+        """中期/最终：写 TSV+报告、智能猜测、刷新库存。"""
+        self._persist_oc_header()
+        self.downloader.generate_download_report(
+            results, queue, failed_details, stage=stage
+        )
+        guess = self.smart_guess_receivers(notify=False) or ""
+        self.refresh_inventory()
+        if open_viz:
+            self.open_visualization_html()
+        return guess
+
     def _run_download_pipeline(self, queue):
+        mid_box = {"guess": "", "deferred_n": 0, "cancelled": False}
         try:
-            def progress(p, current, total):
+            def progress(p, current, total, email_info=None):
                 def _ui(pv=p, c=current, t=total):
-                    self.work_progress["value"] = pv * 0.85
+                    # 主轮占到 70%，后台补下 70→95
+                    self.work_progress["value"] = min(95, max(pv * 0.7, self.work_progress["value"]))
                     self.work_status_var.set(f"下载中… {c}/{t}")
                 self.root.after(0, _ui)
-                if current <= len(queue):
-                    info = queue[current - 1]
-                    status = info.get("status", "")
-                    subject = info.get("subject", "")
-                    if status == "skipped":
-                        msg = f"[{current}/{total}] 跳过: {subject}\n"
-                    elif status == "failed":
-                        msg = f"[{current}/{total}] 失败: {subject}\n"
-                    elif status == "success":
-                        msg = f"[{current}/{total}] 已下载: {subject}\n"
-                    else:
-                        msg = f"[{current}/{total}] 处理中: {subject}\n"
-                    self.root.after(0, lambda m=msg: self.add_work_log(m))
+                info = email_info
+                if not info:
+                    return
+                try:
+                    shown = queue.index(info) + 1
+                except ValueError:
+                    shown = current
+                self.upsert_work_log_mail(
+                    info.get("id", shown),
+                    shown,
+                    total,
+                    info.get("status", ""),
+                    info.get("subject", ""),
+                    attempt=info.get("attempt"),
+                )
 
-            results = self.downloader.download_multiple_emails(queue, progress)
+            def mid_phase(results, deferred, failed_details, cancelled):
+                mid_box["deferred_n"] = len(deferred)
+                mid_box["cancelled"] = cancelled
+                try:
+                    # 文件 IO 可在工作线程；Tk/智能猜测放到 UI 线程
+                    self.downloader.generate_download_report(
+                        results, queue, failed_details, stage="中期汇总（主轮结束）"
+                    )
+                    self._mid_flushed = True
+                except Exception as e:
+                    logger.error(f"中期落盘失败: {e}")
+
+                ok_n = len([r for r in results if r.get("status") in ("success", "skipped")])
+
+                def _ui_mid(n_ok=ok_n, n_def=len(deferred), was_cancel=cancelled):
+                    try:
+                        self._persist_oc_header()
+                        guess = self.smart_guess_receivers(notify=False) or ""
+                        mid_box["guess"] = guess
+                    except Exception as e:
+                        logger.error(f"中期智能猜测失败: {e}")
+                        guess = ""
+                    self.work_progress["value"] = 75
+                    self.refresh_inventory()
+                    if was_cancel:
+                        self.summary_var.set(
+                            f"已按当前进度结束。已登记合法信件 {n_ok}/{len(queue)} 封。\n"
+                            f"可以打开可视化。\n\n{guess}"
+                        )
+                        self.work_status_var.set("已提前结束，合法信件已入库")
+                        self.add_work_log("\n—— 中期落盘完成（提前结束）——\n")
+                    elif n_def:
+                        self.summary_var.set(
+                            f"大部分任务已成功（已登记 {n_ok}/{len(queue)}）。\n"
+                            f"另有 {n_def} 封因网络延迟暂挂，正在后台继续补下…\n"
+                            f"可以先打开可视化。\n\n{guess}"
+                        )
+                        self.work_status_var.set(f"主轮完成，后台补下 {n_def} 封…")
+                        self.add_work_log(
+                            f"\n—— 中期落盘完成；后台补下 {n_def} 封 ——\n"
+                        )
+                    else:
+                        self.summary_var.set(
+                            f"全部主轮完成，已登记 {n_ok}/{len(queue)} 封。\n\n{guess}"
+                        )
+                        self.work_status_var.set("主轮完成，正在收尾…")
+                        self.add_work_log("\n—— 中期落盘完成 ——\n")
+                    self.open_visualization_html()
+
+                self.root.after(0, _ui_mid)
+
+            def on_bg_success(results, failed_details, stage):
+                try:
+                    self.downloader.generate_download_report(
+                        results, queue, failed_details, stage="后台补下增量"
+                    )
+                except Exception as e:
+                    logger.error(f"后台增量落盘失败: {e}")
+                self.root.after(0, self.refresh_inventory)
+
+            outcome = self.downloader.download_multiple_emails(
+                queue,
+                progress_callback=progress,
+                soft_attempts=2,
+                hard_attempts=10,
+                mid_phase_callback=mid_phase,
+                on_result_callback=on_bg_success,
+            )
+            results = outcome.get("results") or []
+            failed_details = outcome.get("failed_details") or []
+            final_failed = outcome.get("final_failed") or []
+            cancelled = outcome.get("cancelled", False)
             success = len([r for r in results if r.get("status") == "success"])
             skipped = len([r for r in results if r.get("status") == "skipped"])
-            failed = len([r for r in results if r.get("status") == "failed"])
 
             def finish():
                 try:
-                    self._persist_oc_header()
-                    # 确保别名进 downloader，供报告写入
-                    self.work_status_var.set("正在识别收件人…")
-                    self.work_progress["value"] = 90
-                    guess = self.smart_guess_receivers(notify=False) or ""
-                    self.summary_var.set(
-                        f"找到并处理 {len(queue)} 封。新下载 {success}，跳过 {skipped}，失败 {failed}。\n\n{guess}"
-                    )
+                    if not self._mid_flushed:
+                        self._flush_download_artifacts(
+                            results, queue, failed_details,
+                            stage="最终汇总", open_viz=True,
+                        )
+                    else:
+                        self.downloader.generate_download_report(
+                            results, queue, failed_details, stage="最终汇总"
+                        )
+                        guess2 = self.smart_guess_receivers(notify=False) or mid_box.get("guess", "")
+                        self.refresh_inventory()
+                        mid_box["guess"] = guess2
+
+                    guess = mid_box.get("guess", "")
                     self.work_progress["value"] = 100
-                    self.work_status_var.set("入库完成，正在打开[地缝可视化]")
-                    self.add_work_log("\n入库完成。\n")
-                    self.refresh_inventory()
-                    if self.open_visualization_html():
-                        self.work_status_var.set("入库完成，[地缝可视化]已打开")
+                    fail_subjects = [
+                        (e.get("subject") or str(e.get("id"))) for e in final_failed
+                    ]
+                    if cancelled:
+                        self.summary_var.set(
+                            f"已提前结束。新下载 {success}，跳过 {skipped}。\n"
+                            f"已经可以打开可视化。\n\n{guess}"
+                        )
+                        self.work_status_var.set("已结束（当前进度）")
+                    elif fail_subjects:
+                        listed = "；".join(fail_subjects[:12])
+                        more = f" 等共 {len(fail_subjects)} 封" if len(fail_subjects) > 12 else ""
+                        msg = (
+                            f"已经可以打开可视化。新下载 {success}，跳过 {skipped}。\n"
+                            f"但由于网络延迟，部分任务【{listed}{more}】在多次尝试后失败，"
+                            f"可继续下载或通过「信件库存 → 手动录入」导入该信件！\n\n{guess}"
+                        )
+                        self.summary_var.set(msg)
+                        self.work_status_var.set("入库完成（部分失败）")
+                        self.add_work_log("\n—— 最终汇总：部分信件失败 ——\n")
+                        messagebox.showinfo("下载完成", msg)
+                    else:
+                        self.summary_var.set(
+                            f"全部完成。新下载 {success}，跳过 {skipped}。\n\n{guess}"
+                        )
+                        self.work_status_var.set("入库完成")
+                        self.add_work_log("\n—— 最终汇总：全部成功 ——\n")
                 finally:
                     self.busy = False
+                    try:
+                        self.cancel_download_btn.configure(state=tk.DISABLED)
+                    except Exception:
+                        pass
 
             self.root.after(0, finish)
         except Exception as e:
@@ -2752,6 +3356,11 @@ class EmailDownloaderGUI:
             self.root.after(0, lambda err=e: messagebox.showerror("错误", f"入库失败: {err}"))
             self.root.after(0, lambda: self.work_status_var.set("入库失败"))
             self.root.after(0, lambda: setattr(self, "busy", False))
+            self.root.after(
+                0,
+                lambda: self.cancel_download_btn.configure(state=tk.DISABLED)
+                if hasattr(self, "cancel_download_btn") else None,
+            )
 
     def add_work_log(self, text):
         self.work_log.configure(state="normal")
@@ -2832,6 +3441,11 @@ class EmailDownloaderGUI:
         ttk.Entry(path_box, textvariable=self.imap_port_var, width=8).grid(row=3, column=1, sticky=tk.W, pady=4)
         ttk.Label(path_box, text="连接超时（秒）").grid(row=4, column=0, sticky=tk.W, pady=4, padx=(0, 8))
         ttk.Entry(path_box, textvariable=self.timeout_var, width=8).grid(row=4, column=1, sticky=tk.W, pady=4)
+        ttk.Label(
+            path_box,
+            text="弱网/大附件建议 ≥300；过短易导致下载卡住或反复失败。",
+            foreground="gray",
+        ).grid(row=4, column=2, sticky=tk.W, padx=6)
         ttk.Label(path_box, text="批处理大小").grid(row=5, column=0, sticky=tk.W, pady=4, padx=(0, 8))
         ttk.Entry(path_box, textvariable=self.batch_var, width=8).grid(row=5, column=1, sticky=tk.W, pady=4)
 
@@ -2866,6 +3480,24 @@ class EmailDownloaderGUI:
             "摘要会写「没有需要补全的空缺」。"
         )
         ttk.Label(help_box, text=help_text, justify=tk.LEFT, wraplength=500).pack(anchor=tk.W)
+
+        maint_box = ttk.LabelFrame(inner, text="库存维护", padding=(8, 6))
+        maint_box.pack(fill=tk.X, pady=6)
+        ttk.Label(
+            maint_box,
+            text=(
+                "信件入库/改库存时会自动重建附件报告（attachment_report.tsv）。\n"
+                "若可视化附件柜与本地信夹不一致，可在此手动再扫一遍。"
+            ),
+            justify=tk.LEFT,
+            wraplength=500,
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 6))
+        ttk.Button(
+            maint_box,
+            text="修复附件库存…",
+            command=self.repair_attachment_inventory,
+        ).pack(anchor=tk.W)
 
         foot = ttk.Frame(self.advanced_frame)
         foot.pack(fill=tk.X, pady=(8, 0))
@@ -2908,11 +3540,40 @@ class EmailDownloaderGUI:
         except Exception as e:
             messagebox.showerror("错误", f"保存失败: {e}")
 
+    def repair_attachment_inventory(self):
+        """手动根据 global_result.tsv 重扫信夹，重建 attachment_report.tsv。"""
+        tsv = self.downloader.base_dir / "global_result.tsv"
+        if not tsv.exists():
+            messagebox.showwarning("提示", "还没有 global_result.tsv，请先下载入库。")
+            return
+        try:
+            from uitl_test import extract_attachments_from_tsv
+            out = self.downloader.regenerate_attachment_report()
+            if not out:
+                messagebox.showerror("错误", "重建附件报告失败，请查看日志。")
+                return
+            results = extract_attachments_from_tsv(tsv)
+            n_files = sum(len(r.get("file_attachments") or []) for r in results)
+            n_text = sum(len(r.get("text_attachments") or []) for r in results)
+            self.refresh_inventory()
+            messagebox.showinfo(
+                "已修复",
+                f"已重建附件库存报告：\n"
+                f"· 含附件信件：{len(results)} 封\n"
+                f"· 文件附件：{n_files}\n"
+                f"· 文字附件行：{n_text}\n\n"
+                f"请刷新可视化页面查看。",
+            )
+        except Exception as e:
+            logger.error(f"手动修复附件库存失败: {e}")
+            messagebox.showerror("错误", f"修复失败: {e}")
+
     # ==================== 库存 ====================
     def _build_inventory_tab(self):
         top = ttk.Frame(self.inventory_frame)
         top.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(top, text="已入库信件。在此改动信息。").pack(side=tk.LEFT)
+        ttk.Label(top, text="已入库信件。在此改动或手动补录，都会写入 global_result.tsv。").pack(side=tk.LEFT)
+        ttk.Button(top, text="手动录入…", command=self.open_manual_inventory_dialog).pack(side=tk.RIGHT, padx=4)
         ttk.Button(top, text="刷新", command=self.refresh_inventory).pack(side=tk.RIGHT)
 
         cols = ("收/发", "日期", "发件人", "收件人", "信件类型", "路径")
@@ -3022,10 +3683,153 @@ class EmailDownloaderGUI:
             values=(row["direction"], row["date"], row["sender"], row["receiver"], row["letter_type"], row["path"]),
         )
         self._write_inventory_tsv()
-        messagebox.showinfo("已保存", "修改已写入库存表。")
+        messagebox.showinfo("已保存", "修改已写入库存表（global_result.tsv）。")
+
+    def open_manual_inventory_dialog(self):
+        """手动录入一封信到库存，并同步写入 global_result.tsv。"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("手动录入信件")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        direction = tk.StringVar(value="收")
+        date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        sender_var = tk.StringVar()
+        receiver_var = tk.StringVar()
+        type_var = tk.StringVar()
+        folder_var = tk.StringVar()
+        subject_var = tk.StringVar(value="手动录入")
+
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+        frm.columnconfigure(1, weight=1)
+
+        ttk.Label(frm, text="收/发").grid(row=0, column=0, sticky=tk.W, pady=3)
+        ttk.Combobox(frm, textvariable=direction, values=("收", "发"), width=8, state="readonly").grid(
+            row=0, column=1, sticky=tk.W, pady=3
+        )
+        ttk.Label(frm, text="发信日期").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self._make_date_row(frm, date_var, width=12).grid(row=1, column=1, sticky=tk.W, pady=3)
+        ttk.Label(frm, text="发件人").grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(frm, textvariable=sender_var, width=28).grid(row=2, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(frm, text="收件人").grid(row=3, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(frm, textvariable=receiver_var, width=28).grid(row=3, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(frm, text="信件类型").grid(row=4, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(frm, textvariable=type_var, width=28).grid(row=4, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(frm, text="主题(文件夹名)").grid(row=5, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(frm, textvariable=subject_var, width=28).grid(row=5, column=1, sticky=tk.EW, pady=3)
+        ttk.Label(frm, text="本地文件夹").grid(row=6, column=0, sticky=tk.W, pady=3)
+        path_row = ttk.Frame(frm)
+        path_row.grid(row=6, column=1, sticky=tk.EW, pady=3)
+        ttk.Entry(path_row, textvariable=folder_var, width=22).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def _browse():
+            from tkinter import filedialog
+            d = filedialog.askdirectory(
+                initialdir=str(self.downloader.base_dir),
+                title="选择已有信件文件夹（含 content.txt 更佳）",
+            )
+            if d:
+                folder_var.set(d)
+
+        ttk.Button(path_row, text="浏览…", command=_browse).pack(side=tk.LEFT, padx=4)
+        ttk.Label(
+            frm,
+            text="可浏览已有信夹；留空则按规则在 email\\收|发 下新建并写最小 content.txt。",
+            foreground="gray",
+            wraplength=360,
+        ).grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=4)
+
+        def _ok():
+            d = direction.get().strip()
+            date_s = date_var.get().strip()
+            sender = sender_var.get().strip()
+            receiver = receiver_var.get().strip()
+            letter_type = type_var.get().strip()
+            subject = subject_var.get().strip() or "手动录入"
+            if d not in ("收", "发"):
+                messagebox.showwarning("提示", "收/发只能是「收」或「发」。", parent=dlg)
+                return
+            try:
+                datetime.strptime(date_s, "%Y-%m-%d")
+            except Exception:
+                messagebox.showwarning("提示", "日期格式应为 YYYY-MM-DD。", parent=dlg)
+                return
+            if not sender or not letter_type:
+                messagebox.showwarning("提示", "请至少填写发件人和信件类型。", parent=dlg)
+                return
+
+            folder_raw = folder_var.get().strip()
+            base = self.downloader.base_dir
+            if folder_raw:
+                email_dir = Path(folder_raw)
+                if not email_dir.is_dir():
+                    messagebox.showerror("错误", "所选路径不是文件夹。", parent=dlg)
+                    return
+            else:
+                date_folder = date_s.replace("-", "")
+                safe = self.downloader._safe_filename(subject)[:40]
+                email_dir = base / d / f"{date_folder}_{safe}"
+                email_dir.mkdir(parents=True, exist_ok=True)
+                content = email_dir / "content.txt"
+                if not content.exists():
+                    content.write_text(
+                        f"主题: {subject}\n"
+                        f"发件邮箱: \n"
+                        f"收件邮箱: \n"
+                        f"日期: {date_s}\n"
+                        f"{'-'*50}\n\n"
+                        f"[手动录入]\n发件人=【{sender}】\n",
+                        encoding="utf-8",
+                    )
+
+            try:
+                rel = email_dir.resolve().relative_to(script_dir.resolve())
+                path_fmt = ".\\" + str(rel).replace("/", "\\")
+            except Exception:
+                try:
+                    rel = email_dir.resolve().relative_to(base.parent.resolve())
+                    path_fmt = ".\\" + str(rel).replace("/", "\\")
+                except Exception:
+                    path_fmt = str(email_dir)
+
+            # 去重：同路径则更新
+            updated = False
+            for row in self._inv_rows:
+                if row.get("path") == path_fmt:
+                    row.update({
+                        "direction": d,
+                        "date": date_s,
+                        "sender": sender,
+                        "receiver": receiver,
+                        "letter_type": letter_type,
+                        "path": path_fmt,
+                    })
+                    updated = True
+                    break
+            if not updated:
+                self._inv_rows.append({
+                    "direction": d,
+                    "date": date_s,
+                    "sender": sender,
+                    "receiver": receiver,
+                    "letter_type": letter_type,
+                    "path": path_fmt,
+                })
+            self._write_inventory_tsv()
+            self.refresh_inventory()
+            dlg.destroy()
+            messagebox.showinfo("已录入", "已写入库存并同步到 global_result.tsv。")
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=8, column=0, columnspan=2, sticky=tk.E, pady=(8, 0))
+        ttk.Button(btns, text="取消", command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btns, text="保存到库存", command=_ok).pack(side=tk.RIGHT)
 
     def _write_inventory_tsv(self):
         path = self.downloader.base_dir / "global_result.tsv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         # 保留最新 OC 头
         oc_line = "oc_registerdata\t" + ",".join(self.downloader.oc_registerdata)
         groups = []
@@ -3041,6 +3845,11 @@ class EmailDownloaderGUI:
                 f"{row['direction']}\t{row['date']}\t{row['sender']}\t{row['receiver']}\t{row['letter_type']}\t{row['path']}"
             )
         path.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+        # 库存变更后同步附件登记，避免可视化仍用旧 attachment_report.tsv
+        try:
+            self.downloader.regenerate_attachment_report()
+        except Exception as e:
+            logger.error(f"库存保存后刷新附件报告失败: {e}")
 
     def open_selected_mail_folder(self):
         sel = self.inv_tree.selection()
