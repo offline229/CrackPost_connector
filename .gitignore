@@ -5,9 +5,11 @@ email_Cyclop/
 email_yamuko/
 email/
 dist/
+test/
 *.ini
 *.txt
 *.exe
 *.rar
 *.zip
 *.pyc
+_test_*.py

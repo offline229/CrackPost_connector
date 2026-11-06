@@ -591,22 +591,55 @@
             const resolveName = (n) => aliasMap.get(n) || n;
             const splitAndResolve = (str) => (str || '').split(',').map(s => resolveName(s.trim())).filter(Boolean).join(',');
 
-            // 妥妥的 TSV 解析（兼容文字附件里的真实换行符）
-            const rawLines = data.trim().split('\n');
+            // TSV 解析：新格式文字附件在单行内用 \x1e 分隔、\\n 表示换行；
+            // 仍兼容旧版「字段内真实换行」记录。
+            const decodeTextAttachments = (raw) => {
+                if (!raw || !String(raw).trim()) return [];
+                const s = String(raw);
+                const SEP = '\x1e';
+                let chunks;
+                if (s.includes(SEP)) {
+                    chunks = s.split(SEP);
+                } else if (s.includes('\\n') || s.includes('\n')) {
+                    // 旧：真实换行多条；或已转义的单条
+                    chunks = s.includes(SEP) ? s.split(SEP) : (s.includes('\n') && !s.includes('\\n') ? s.split('\n') : [s]);
+                } else {
+                    chunks = [s];
+                }
+                return chunks.map(c => c
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t')
+                    .replace(/\\\\/g, '\\')
+                    .trim()
+                ).filter(Boolean);
+            };
+
+            const rawLines = data.replace(/^\uFEFF/, '').split('\n');
             const validLines = [];
-            let currentLine = "";
+            let currentLine = '';
+            // 正常行以 收/发 开头；兼容旧报告里元数据空、仅路径列有 email\收|发\… 的残缺行
+            const looksLikeRowStart = (line) =>
+                /^(收|发)\t/.test(line)
+                || /(?:^|\t)(?:\.\\)?email[\\\/](?:收|发)[\\\/]/i.test(line)
+                || line.startsWith('收/发类型\t');
             for (const line of rawLines) {
                 if (!currentLine) {
                     currentLine = line;
-                } else {
-                    // 如果 tab 数量不足够（表头有9个tab共10列），说明仍属于前一行的多行文本换行
-                    const tabCount = (currentLine.match(/\t/g) || []).length;
-                    if (tabCount < 9) {
-                        currentLine += "\n" + line;
-                    } else {
+                    continue;
+                }
+                const tabCount = (currentLine.match(/\t/g) || []).length;
+                // 未凑齐 10 列，或下一行不像新纪录 → 续行
+                if (tabCount < 9 || !looksLikeRowStart(line)) {
+                    // 若当前已满 9 个 tab 且下一行像新纪录，则切行
+                    if (tabCount >= 9 && looksLikeRowStart(line)) {
                         validLines.push(currentLine);
                         currentLine = line;
+                    } else {
+                        currentLine += '\n' + line;
                     }
+                } else {
+                    validLines.push(currentLine);
+                    currentLine = line;
                 }
             }
             if (currentLine) validLines.push(currentLine);
@@ -621,29 +654,22 @@
                 const sender = resolveName((cols[2] || '').trim());
                 const receiver = splitAndResolve((cols[3] || '').trim());
 
-                // cols[4] 信件类型, cols[5] 下载位置, cols[6] 文字数, cols[7] 文件数...
                 const letterPath = cols[5] ? cols[5].trim() : '';
-                const textAttsRaw = cols[8] ? cols[8].trim() : '';
-                const fileAttsRaw = cols[9] ? cols[9].trim() : ''; // 【修复】在此处补充 fileAttsRaw 的定义
+                const textAttsRaw = cols[8] ? cols[8] : '';
+                const fileAttsRaw = cols[9] ? cols[9].trim() : '';
 
-                // 处理文字附件（换行符分割）
-                if (textAttsRaw) {
-                    const textLines = textAttsRaw.split('\n');
-                    for (const txt of textLines) {
-                        if (!txt.trim()) continue;
-                        attachments.push({
-                            type: sendType,
-                            date: dateStr,
-                            sender: sender,
-                            receiver: receiver,
-                            isFile: false,
-                            content: txt.trim(),
-                            letterPath
-                        });
-                    }
+                for (const txt of decodeTextAttachments(textAttsRaw)) {
+                    attachments.push({
+                        type: sendType,
+                        date: dateStr,
+                        sender: sender,
+                        receiver: receiver,
+                        isFile: false,
+                        content: txt,
+                        letterPath
+                    });
                 }
 
-                // 处理文件附件（“|” 分割）
                 if (fileAttsRaw) {
                     const filePaths = fileAttsRaw.split('|').map(f => f.trim()).filter(Boolean);
                     for (const fp of filePaths) {
@@ -853,15 +879,27 @@
             ocSentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
 
             emailData.forEach(email => {
-                const letterTypeMatch = (email.letterType || '').match(/^([ABC])([^\s]*)/i);
-                if (!letterTypeMatch) return;
-                const letterType = letterTypeMatch[1].toUpperCase();
-                const letterNumber = letterTypeMatch[0];
+                const parsed = parseLetterType(email.letterType);
+                if (!parsed) return;
+                const letterNumber = String(email.letterType || '').trim().split(/\s/)[0];
                 const isOCSender = ocNames.includes(email.sender);
+                const sendType = (email.sendType || '').trim();
+                const isCombo = parsed.kinds.length > 1;
+                // 组合信按分量各画一次：发 B+C = C 箭头 + B 广播；发 A+B = A 圈 + B 广播；发 A+C = A 圈 + C 箭头。
+                // 收到的 B+C 对收信人而言就是一封 B；A+B / A+C 收照常各画各的。
+                let kinds = parsed.kinds;
+                if (isCombo && !(isOCSender && sendType === '发') && kinds.includes('B') && kinds.includes('C')) {
+                    kinds = kinds.filter(k => k !== 'C');
+                }
+                const comboReceivers = (email.receiver || '').split(',').map(r => r.trim()).filter(Boolean);
+                kinds.forEach(letterType => pushLetter(email, letterType, letterNumber, isOCSender, isCombo, comboReceivers));
+            });
+            return lettersData;
 
+            function pushLetter(email, letterType, letterNumber, isOCSender, isCombo, splitReceivers) {
                 if (isOCSender) { //发信，有可能是正常发BC信，也有可能是作为oc自己发收的A信。
-                    if (letterType === 'A') {// 若自己发的A信，不计入计算，只有当A正式被广播收到时，才计算。
-                        if ((email.sendType || '').trim() === '收') {
+                    if (letterType === 'A') {// 单独发的A信不计入，只有当A正式被广播收到时才计算；组合发信里的 A 照画发件圈。
+                        if (isCombo || (email.sendType || '').trim() === '收') {
                             lettersData.push({
                                 sender: email.sender,
                                 type: letterType,
@@ -892,7 +930,7 @@
                                 type: letterType,
                                 number: letterNumber,
                                 date: email.date,
-                                receivers: [email.receiver],
+                                receivers: isCombo ? splitReceivers : [email.receiver],
                                 isOCSender: true,
                                 path: email.path || ''
                             });
@@ -929,15 +967,14 @@
                                 type: letterType,
                                 number: letterNumber,
                                 date: email.date,
-                                receivers: [email.receiver],
+                                receivers: isCombo ? splitReceivers : [email.receiver],
                                 isOCSender: false,
                                 path: email.path || ''
                             });
                         }
                     }
                 }
-            });
-            return lettersData;
+            }
         }
 
         const usersData = buildUsersData();
@@ -1387,9 +1424,9 @@
                         hoveredRing = ringHit;
                         const rObj = ringHit.rObj;
                         const sender = displayPersonName(ringHit.owner.id);
-                        const receivers = (rObj.letter && rObj.letter.receivers)
-                            ? rObj.letter.receivers.map(displayPersonName).join(',')
-                            : '';
+                        const receivers = displayReceiverNames(
+                            (rObj.letter && rObj.letter.receivers) ? rObj.letter.receivers : []
+                        );
                         const number = (rObj.letter && rObj.letter.number) || '';
                         const date = (rObj.letter && rObj.letter.date) || rObj.dateObj.toISOString().slice(0, 10);
                         const type = 'A';
@@ -1408,7 +1445,7 @@
                         hoveredBroadcast = bcastHit; // ← 新增状态变量
                         const letter = bcastHit.letter;
                         const sender = displayPersonName(bcastHit.sender.id);
-                        const receivers = (letter.receivers || []).map(displayPersonName).join(',');
+                        const receivers = displayReceiverNames(letter.receivers || []);
                         const number = letter.number || '';
                         const date = letter.date || '';
                         const type = 'B';
@@ -1834,6 +1871,31 @@
     }
 
     /**
+     * 拆解信件类型：A123 / A*12 / B+C7 / C某某 / A+C某某 / A+B
+     * → { kinds: ['A','C'], star, number, target }；不是 A/B/C 开头返回 null
+     */
+    function parseLetterType(raw) {
+        const s = String(raw || '').trim().replace(/＋/g, '+').replace(/＊/g, '*');
+        const m = s.match(/^([ABC](?:\s*\+\s*[ABC])*)([\s\S]*)$/i);
+        if (!m) return null;
+        const set = new Set((m[1].match(/[ABC]/gi) || []).map(k => k.toUpperCase()));
+        const kinds = ['A', 'B', 'C'].filter(k => set.has(k));
+        const rest = m[2].trim();
+        const mnum = rest.match(/^(\*?)[\s_\-·]*(\d+)$/);
+        if (mnum) return { kinds, star: mnum[1], number: mnum[2], target: '' };
+        return { kinds, star: '', number: '', target: rest.replace(/^[\s_=:：]+/, '') };
+    }
+
+    /** 字数/封数统计用的单一类型：组合信只计一次 */
+    function statsLetterKind(parsed, sendType) {
+        if (!parsed) return '';
+        const k = parsed.kinds;
+        if (k.length === 1) return k[0];
+        if (sendType === '发') return k.includes('C') ? 'C' : 'B';
+        return k.includes('B') ? 'B' : 'C';
+    }
+
+    /**
      * 构建 A 环数据（从 emailData）
      */
     function buildSenderRings(emailData) {
@@ -1850,9 +1912,12 @@
 
         emailData.forEach(e => {
             const raw = (e.letterType || '').trim();
-            const m = raw.match(/^[Aa][＊*]?\s*[-_·]?\s*(\d+)/);
-            if (!m) return;
-            const digits = m[1];
+            const p = parseLetterType(raw);
+            if (!p || !p.kinds.includes('A')) return;
+            // 组合发信（A+B / A+C）无编号：按信件路径单独成环
+            const isComboSend = (e.sendType || '').trim() === '发' && p.kinds.length > 1;
+            const digits = p.number || (isComboSend ? `send:${e.path || e.date}` : '');
+            if (!digits) return;
             const senderRaw = (e.sender || '').trim();
             if (!senderRaw) return;
             const normSender = normName(senderRaw);
@@ -1982,8 +2047,7 @@
                 if (!added || added <= 0) return;
 
                 const sendType = (email.sendType || '').trim();
-                const letterTypeRaw = (email.letterType || '').trim();
-                const letterType = letterTypeRaw ? letterTypeRaw.charAt(0).toUpperCase() : '';
+                const letterType = statsLetterKind(parseLetterType(email.letterType), sendType);
                 const sender = (email.sender || '').trim();
                 const receiver = (email.receiver || '').trim();
                 const isOCSender = ocNameSet.has(sender);
@@ -3306,6 +3370,8 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         return !!(cb && cb.checked);
     }
 
+    const UNKNOWN_RECEIVER_LABEL = '[未知的收信人]';
+
     /** 匿名化统一用 ***（兼容像素字体，避免空方块不显示） */
     function displayPersonName(name) {
         if (isAnonymizeOn()) return '***';
@@ -3317,16 +3383,23 @@ function drawLinks(ctx, links, getDisplayPos, computeQuadraticControl, enableLas
         return String(name == null ? '' : name);
     }
 
+    /** 收件人列表；空白显示 [未知的收信人] */
     function displayPersonList(str) {
         const parts = String(str == null ? '' : str).split(',').map(s => s.trim()).filter(Boolean);
-        if (!parts.length) return isAnonymizeOn() ? '***' : '';
+        if (!parts.length) return isAnonymizeOn() ? '***' : UNKNOWN_RECEIVER_LABEL;
         return parts.map(displayPersonName).join(', ');
     }
 
     function displayPersonListPlain(str) {
         const parts = String(str == null ? '' : str).split(',').map(s => s.trim()).filter(Boolean);
-        if (!parts.length) return isAnonymizeOn() ? '***' : '';
+        if (!parts.length) return isAnonymizeOn() ? '***' : UNKNOWN_RECEIVER_LABEL;
         return parts.map(displayPersonNamePlain).join(', ');
+    }
+
+    function displayReceiverNames(list) {
+        const parts = (list || []).map(s => String(s == null ? '' : s).trim()).filter(Boolean);
+        if (!parts.length) return isAnonymizeOn() ? '***' : UNKNOWN_RECEIVER_LABEL;
+        return parts.map(displayPersonName).join(',');
     }
 
     /**
