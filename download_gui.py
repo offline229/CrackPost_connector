@@ -268,14 +268,15 @@ class EmailDownloader:
 
         # 发信常见：C风之帽 / CDD / C小菌+巧真（无数字；截到「来自」或路径边界）
         leaf = str(subject).replace("\\", "/").split("/")[-1]
-        leaf = re.sub(r"^\d{8}_\d{6}_", "", leaf)  # 去时间戳前缀
+        # 去日期前缀：YYYYMMDD_HHMMSS_ 或仅 YYYYMMDD_（旧夹名常见）
+        leaf = re.sub(r"^\d{8}(?:_\d{6})?_", "", leaf)
         cleaned = re.sub(r"(?i)^(?:Fw|FW|转发)[:：_\s-]*", "", leaf).strip()
         cleaned = re.sub(r"来自.*$", "", cleaned).strip()
         cleaned = cleaned.strip("_- ")
         m3 = re.match(r"(?i)^((?:[AB]\s*\+\s*)?C)(.+)$", cleaned)
         if m3 and m3.group(2).strip():
-            # 去掉文件夹里偶发的尾部噪声
-            name = re.sub(r"[\s_]+", "", m3.group(2))
+            # 空格去掉；文件夹里用 _ 分隔的称呼改成 ·，避免 C安尔·珀尔_薇尔 被粘成一串
+            name = re.sub(r"\s+", "", m3.group(2)).replace("_", "·")
             name = re.sub(r"(的信|的)$", "", name)
             if name:
                 return self.normalize_letter_type(m3.group(1) + name)
@@ -1961,40 +1962,24 @@ class EmailDownloader:
 
     @staticmethod
     def extract_letter_receiver_name(content_text="", letter_type="", send_type="", only_oc_name=""):
-        """解析收件人（角色名）。
+        """解析收件人（角色名）——入库时的轻量推断，不做「致…」抠字。
 
-        优先：
-          1) 发信且类型为 C… → 取 C 后称呼
-          2) 正文「致【甲】」「致甲：」「致 甲：」
-          3) 收信且全库仅一个 OC → 该 OC
+        收 C 的对象以「补全收件人」为准：正文对照已登记 OC/别名，再不行才笔友唯一。
+        「致卡斯提瓦先生（中之人：…）」这类玩笑/括号会被旧规则整段当成人名，已废除。
+
+        仍保留：
+          1) 发信且类型含 C → 取 C 后称呼
+          2) 收信且全库仅一个 OC → 该 OC
+          3) 收信广播 A/B/… → 此处不填（交给补全按注册日填全体）
         """
-        if send_type == "发":
-            p = EmailDownloader.parse_letter_type(letter_type)
-            if p and "C" in p["kinds"] and p["target"]:
-                return re.sub(r"[\s=\[\]]+", "", p["target"])
+        p = EmailDownloader.parse_letter_type(letter_type)
 
-        text = content_text or ""
-        if text:
-            m = re.search(r"致\s*(【+.+?】+)", text)
-            if m:
-                name = m.group(1).strip()
-                while name.startswith("【") and name.endswith("】") and name.count("【") >= 1:
-                    # 单层去括号；多层剥到内层再去
-                    inner = name[1:-1].strip()
-                    if inner.startswith("【"):
-                        name = inner
-                        continue
-                    name = inner
-                    break
-                name = re.sub(r"\s+", " ", name).strip()
-                if name:
-                    return name
-            m = re.search(r"致\s*([^\n\r【：:]{1,40})\s*[:：]", text)
-            if m:
-                name = re.sub(r"\s+", " ", m.group(1)).strip()
-                # 排除「致此」「致敬」等
-                if name and name not in ("此", "敬", "辞") and not name.startswith("信"):
-                    return name
+        if send_type == "发":
+            if p and "C" in p["kinds"] and p["target"]:
+                target = re.sub(r"[\s=\[\]]+", "", p["target"])
+                if target and not EmailDownloader.is_collective_or_invalid_receiver(target):
+                    return target
+            return ""
 
         if send_type == "收" and only_oc_name:
             return only_oc_name
@@ -2177,7 +2162,7 @@ class EmailDownloader:
                 cols[2] = sender
                 row_changed = True
 
-            # 补收件人：发信 C… / 收信「致…」
+            # 补收件人：发信 C…；收信交给补全（对照 OC），不在此抠「致…」
             direction = (cols[0] or "").strip()
             receiver = (cols[3] or "").strip()
             if not receiver:
@@ -2214,7 +2199,7 @@ class EmailDownloader:
 
         # 1. 读取已有 TSV
         existing_oc = set()
-        existing_mails = set()
+        existing_mails = {}  # path_key -> 行文本（6 列）
         existing_rows = []
         existing_aliases_line = "" # 【新增】：保存可能的别名行
         
@@ -2246,19 +2231,39 @@ class EmailDownloader:
                             data_start_idx = i
                             break
                             
-                    # 解析邮件（关键：用更多字段构建唯一键）；丢弃历史误入库的「发 A」广播
+                    # 解析邮件；丢弃历史误入库的「发 A」广播
+                    # 顺带回填空类型/空收件人（旧版写入后「跳过已有」不会再解析）
+                    # existing_mails: path_key -> 已拼好的行（6 列）
                     for line in lines[data_start_idx+1:]:
                         cols = line.strip().split('\t')
                         if len(cols) >= 6:
                             lt = (cols[4] or "").strip()
                             if not lt:
-                                lt = self.extract_letter_type(cols[5]) or self.extract_letter_type(cols[5].replace("\\", "/").split("/")[-1])
-                            if (cols[0] or "").strip() == "发" and self.is_bare_broadcast_a(lt):
+                                lt = self.normalize_letter_type(
+                                    self.extract_letter_type(cols[5])
+                                    or self.extract_letter_type(
+                                        cols[5].replace("\\", "/").split("/")[-1]
+                                    )
+                                )
+                                if lt:
+                                    cols[4] = lt
+                            direction = (cols[0] or "").strip()
+                            if direction == "发" and self.is_bare_broadcast_a(lt):
                                 continue
-                            # 唯一标识：发件人 + 日期 + 主题/类型 + 路径
-                            key = (cols[2], cols[1], cols[4], cols[5])
-                            existing_mails.add(key)
-                            existing_rows.append(line.strip())
+                            if not (cols[3] or "").strip() and lt:
+                                inferred_recv = self.extract_letter_receiver_name(
+                                    content_text="",
+                                    letter_type=lt,
+                                    send_type=direction,
+                                    only_oc_name="",
+                                )
+                                if inferred_recv:
+                                    cols[3] = inferred_recv
+                            path_key = (cols[5] or "").replace("/", "\\").lower()
+                            if not path_key or path_key in existing_mails:
+                                continue
+                            existing_mails[path_key] = "\t".join(cols[:6])
+                            existing_rows.append(existing_mails[path_key])
 
         # 2. 合并 OC（循环中可能继续自动登记发信 OC，故保持 set，写盘前再排序）
         all_oc = set(existing_oc)
@@ -2392,28 +2397,54 @@ class EmailDownloader:
                 except Exception:
                     save_path_formatted = save_path
 
-            # 新增：用更强唯一键（发件人、收件人、日期、类型、路径）
-            key = (sender_name, receiver_name, date_short, letter_type, save_path_formatted)
-            if key not in existing_mails:
-                row = f"{send_type}\t{date_short}\t{sender_name}\t{receiver_name}\t{letter_type}\t{save_path_formatted}"
+            # 按信件路径去重；新解析更完整时覆盖旧空类型/空收件人行
+            path_key = (save_path_formatted or "").replace("/", "\\").lower()
+            row = f"{send_type}\t{date_short}\t{sender_name}\t{receiver_name}\t{letter_type}\t{save_path_formatted}"
+            prev = existing_mails.get(path_key)
+            if prev is None:
                 new_rows.append(row)
-                existing_mails.add(key)
+                existing_mails[path_key] = row
             else:
-                duplicate_count += 1
-                logger.info(f"跳过重复项: {sender_name} {receiver_name} {date_short} {letter_type}")
+                prev_cols = prev.split("\t")
+                # 旧行类型/收件人为空而新行有值 → 替换
+                better = False
+                if len(prev_cols) >= 6:
+                    if not (prev_cols[4] or "").strip() and letter_type:
+                        better = True
+                    if not (prev_cols[3] or "").strip() and receiver_name:
+                        better = True
+                if better:
+                    existing_mails[path_key] = row
+                    # existing_rows 里同步替换
+                    for i, er in enumerate(existing_rows):
+                        if (er.split("\t")[5] if len(er.split("\t")) > 5 else "").replace("/", "\\").lower() == path_key:
+                            existing_rows[i] = row
+                            break
+                    else:
+                        new_rows.append(row)
+                else:
+                    duplicate_count += 1
+                    logger.info(f"跳过重复项: {sender_name} {receiver_name} {date_short} {letter_type}")
 
-        # 4. 合并 old+new 后全局去重
-        all_rows = existing_rows + new_rows
-        unique_row_keys = set()
-        final_rows = []
-        for row in all_rows:
+        # 4. 合并 old+new 后按路径去重（保留字段更完整的一行）
+        by_path = {}
+        for row in existing_rows + new_rows:
             cols = row.strip().split('\t')
             if len(cols) < 6:
                 continue
-            row_key = tuple(cols[:6])  # 用全部6列做唯一性
-            if row_key not in unique_row_keys:
-                unique_row_keys.add(row_key)
-                final_rows.append(row)
+            pk = (cols[5] or "").replace("/", "\\").lower()
+            if not pk:
+                continue
+            prev = by_path.get(pk)
+            if prev is None:
+                by_path[pk] = cols[:6]
+                continue
+            # 优先非空类型、非空收件人
+            score = (1 if (cols[4] or "").strip() else 0) + (1 if (cols[3] or "").strip() else 0)
+            prev_score = (1 if (prev[4] or "").strip() else 0) + (1 if (prev[3] or "").strip() else 0)
+            if score >= prev_score:
+                by_path[pk] = cols[:6]
+        final_rows = ["\t".join(c) for c in by_path.values()]
 
         # 5. 写入 TSV（别名以内存为准，含下载中新登记的 · 分段别名）
         groups = []
@@ -2612,6 +2643,36 @@ class EmailDownloader:
         return True
 
     @staticmethod
+    def is_collective_or_invalid_receiver(name):
+        """集体称呼/套话，不能当收件人登记。
+
+        如：致收到此信的诸位、致各位笔友、地缝的大家…
+        """
+        s = (name or "").strip().strip("，,。.!！、；; ")
+        if not s:
+            return True
+        if s in ("此", "敬", "辞", "信", "你", "您", "他", "她", "它", "笔友"):
+            return True
+        # 明显集体/泛称
+        collective_kw = (
+            "诸位", "各位", "大家", "全体", "所有人", "每一位", "每个",
+            "友人们", "笔友们", "朋友们", "各位笔友", "各位友人",
+            "收到此信", "收到这封", "看到这封", "读到这封", "能够收到",
+            "素未谋面", "素不相识", "陌生而", "陌生的笔友", "可敬的笔友",
+            "地缝中的", "地缝的大家", "地缝的笔友", "地缝友人",
+            "收信者", "亲爱的收信",
+        )
+        if any(k in s for k in collective_kw):
+            return True
+        # 「致收到…」「致全体…」一类
+        if re.match(r"^(收到|看到|读到|能够|全体|所有|各位|诸位)", s):
+            return True
+        # 过长且像整句套话（含「的/们」等），勿误伤长 OC 名如 Melodes Castivar/…
+        if len(s) > 36 and re.search(r"(的|们|此信|这封|笔友|友人)", s):
+            return True
+        return False
+
+    @staticmethod
     def aliases_from_dot_name(name):
         """名字含间隔号 ·/・/• 时，各分段都作为别名（不含全名本身）。
 
@@ -2778,93 +2839,179 @@ class EmailDownloaderGUI:
                     remaining = remaining.replace(token, "\0" * len(token))
             return oc_count
 
+        def _resolve_content_path(directory):
+            try:
+                from uitl_test import _resolve_email_dir
+                ed = _resolve_email_dir(directory, global_result_path)
+                if ed:
+                    return Path(ed) / "content.txt"
+            except Exception:
+                pass
+            project_root = script_dir.resolve()
+            rel_path = directory[2:] if str(directory).startswith(".\\") else directory
+            return project_root / str(rel_path).replace("\\", os.sep) / "content.txt"
+
+        oc_name_set = set(oc_names)
+        # 笔友往来：(oc, 对方) 通信次数；发 oc→对方、收 对方→oc 都计
+        penpal_counts = {}
+        for line in lines[data_start + 1:]:
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) < 6:
+                continue
+            d, sender, recv = (cols[0] or "").strip(), (cols[2] or "").strip(), (cols[3] or "").strip()
+            recvs = [x.strip() for x in recv.split(",") if x.strip()]
+            if d == "发" and sender in oc_name_set:
+                for rv in recvs:
+                    if rv and rv not in oc_name_set and not EmailDownloader.is_collective_or_invalid_receiver(rv):
+                        penpal_counts[(sender, rv)] = penpal_counts.get((sender, rv), 0) + 1
+            elif d == "收" and sender and sender not in oc_name_set:
+                for rv in recvs:
+                    if rv in oc_name_set:
+                        penpal_counts[(rv, sender)] = penpal_counts.get((rv, sender), 0) + 1
+
+        def _unique_penpal_oc(other_name):
+            """与 other 有往来的 OC 若唯一，返回该 OC。"""
+            if not other_name:
+                return ""
+            cands = [oc for oc in oc_names if penpal_counts.get((oc, other_name), 0) > 0]
+            return cands[0] if len(cands) == 1 else ""
+
         changed = 0
+        repaired_type = 0
+        cleared_collective = 0
         already_had = 0
         empty_inbound = 0
         context_logs = []
         new_lines = lines[: data_start + 1]
         oc_guess_count = {oc: 0 for oc in oc_names}
         unguessed_count = 0
+        penpal_guess_count = 0
 
         for idx, row in enumerate(lines[data_start + 1:]):
-            cols = row.strip().split('\t')
+            cols = row.rstrip("\n").split("\t")
             if len(cols) < 6:
-                new_lines.append(row)
+                new_lines.append(row if row.endswith("\n") else row + "\n")
                 continue
 
-            send_type = cols[0]
-            subject = cols[4]
+            send_type = (cols[0] or "").strip()
+            subject = (cols[4] or "").strip()
             send_date = cols[1]
-            receiver = cols[3]
+            receiver = (cols[3] or "").strip()
             directory = cols[5]
+            sender = (cols[2] or "").strip()
+
+            # —— 自我修复：空类型从路径补；集体套话收件人清空 ——
+            if not subject:
+                inferred = EmailDownloader.normalize_letter_type(
+                    self.downloader.extract_letter_type(directory)
+                    or self.downloader.extract_letter_type(
+                        str(directory).replace("\\", "/").split("/")[-1]
+                    )
+                )
+                if inferred:
+                    cols[4] = inferred
+                    subject = inferred
+                    repaired_type += 1
+                    changed += 1
+                    context_logs.append(f"[修类型] 行{data_start + idx + 2} → {inferred}")
 
             # 清理历史误入库的发广播 A（类型栏为 A，或路径叶名为裸 A）
             if send_type == "发":
                 leaf = re.sub(
-                    r"^\d{8}_\d{6}_",
+                    r"^\d{8}(?:_\d{6})?_",
                     "",
                     str(directory).replace("\\", "/").split("/")[-1],
                 )
                 if EmailDownloader.is_bare_broadcast_a(subject) or re.fullmatch(r"A", leaf or "", re.I):
                     continue
 
+            # 集体套话、或「致…」抠出来的非 OC 碎片 → 清空后重猜
+            if receiver and send_type == "收":
+                parts = [p.strip() for p in receiver.split(",") if p.strip()]
+                kept = []
+                dropped = False
+                for p in parts:
+                    if EmailDownloader.is_collective_or_invalid_receiver(p):
+                        dropped = True
+                        continue
+                    # 收信收件人应是已登记 OC；历史「致…」误登记不在 OC 表里
+                    if oc_name_set and p not in oc_name_set:
+                        dropped = True
+                        continue
+                    kept.append(p)
+                if dropped:
+                    cleared_collective += 1
+                    receiver = ",".join(kept)
+                    cols[3] = receiver
+                    changed += 1
+                    context_logs.append(
+                        f"[清误登] 行{data_start + idx + 2} → {receiver or '(空)'}"
+                    )
+
+            # 发 C：类型里带对象时补收件人
+            if send_type == "发" and not receiver and subject:
+                inferred_recv = EmailDownloader.extract_letter_receiver_name(
+                    content_text="", letter_type=subject, send_type="发"
+                )
+                if inferred_recv and not EmailDownloader.is_collective_or_invalid_receiver(inferred_recv):
+                    cols[3] = inferred_recv
+                    receiver = inferred_recv
+                    changed += 1
+                    context_logs.append(f"[发C] 行{data_start + idx + 2} → {inferred_recv}（由类型）")
+
             if send_type == "收":
                 if receiver:
                     already_had += 1
                 else:
                     empty_inbound += 1
-                    subj = (subject or "").strip()
+                    subj = subject
                     if only_one_oc:
                         cols[3] = only_oc_name
                         changed += 1
                         oc_guess_count[only_oc_name] += 1
                         context_logs.append(f"[单OC] 行{data_start + idx + 2} → {only_oc_name}")
                     elif re.match(r"(?i)^(A\+C|C)", subj):
-                        # C / A+C：正文唯一命中主名或别名
-                        content_path = None
-                        try:
-                            from uitl_test import _resolve_email_dir
-                            ed = _resolve_email_dir(directory, global_result_path)
-                            if ed:
-                                content_path = Path(ed) / "content.txt"
-                        except Exception:
-                            content_path = None
-                        if content_path is None:
-                            project_root = script_dir.resolve()
-                            rel_path = directory[2:] if directory.startswith('.\\') else directory
-                            content_path = project_root / rel_path.replace('\\', os.sep) / "content.txt"
+                        # C / A+C：正文对照 OC/别名唯一命中 → 否则唯一笔友往来
+                        content_path = _resolve_content_path(directory)
+                        chosen = None
+                        hit_desc = "无正文"
                         if content_path.exists():
                             try:
                                 content_text = content_path.read_text(encoding="utf-8")
                                 oc_count = _count_oc_in_text(content_text)
                                 nonzero = [oc for oc, c in oc_count.items() if c > 0]
                                 unique = [oc for oc, c in oc_count.items() if c == 1]
-                                chosen = None
                                 if len(nonzero) == 1:
                                     chosen = nonzero[0]
+                                    hit_desc = "正文唯一命中"
                                 elif len(unique) == 1:
                                     chosen = unique[0]
-                                if chosen:
-                                    cols[3] = chosen
-                                    changed += 1
-                                    oc_guess_count[chosen] += 1
-                                    context_logs.append(
-                                        f"[C] 行{data_start + idx + 2} → {chosen}（正文唯一命中）"
-                                    )
+                                    hit_desc = "正文唯一命中"
                                 else:
-                                    unguessed_count += 1
-                                    hit = ", ".join(
+                                    hit_desc = ", ".join(
                                         f"{oc}×{oc_count[oc]}" for oc in nonzero
                                     ) or "无"
-                                    context_logs.append(
-                                        f"[C] 行{data_start + idx + 2} 未补全（正文命中：{hit}）"
-                                    )
                             except Exception:
-                                unguessed_count += 1
+                                hit_desc = "读正文失败"
+                        if not chosen:
+                            chosen = _unique_penpal_oc(sender)
+                            if chosen:
+                                hit_desc = f"唯一笔友往来({penpal_counts.get((chosen, sender), 0)}次)"
+                                penpal_guess_count += 1
+                        if chosen:
+                            cols[3] = chosen
+                            changed += 1
+                            oc_guess_count[chosen] += 1
+                            context_logs.append(
+                                f"[C] 行{data_start + idx + 2} → {chosen}（{hit_desc}）"
+                            )
                         else:
                             unguessed_count += 1
+                            context_logs.append(
+                                f"[C] 行{data_start + idx + 2} 未补全（{hit_desc}；发件人={sender}）"
+                            )
                     elif re.match(r"(?i)^(A\+B|B\+C|A|B)", subj):
-                        # A / B / A+B / B+C（收到的 B+C 按 B 广播收）：注册日 ≤ 发信日的全部 OC
+                        # A / B / A+B / B+C：注册日 ≤ 发信日的全部 OC
                         oc_to_fill = []
                         for oc in oc_names:
                             reg_date = oc_date_map.get(oc, "")
@@ -2882,27 +3029,48 @@ class EmailDownloaderGUI:
                         else:
                             unguessed_count += 1
                     else:
-                        unguessed_count += 1
+                        # 无类型或其它：仍可试唯一笔友
+                        chosen = _unique_penpal_oc(sender)
+                        if chosen:
+                            cols[3] = chosen
+                            changed += 1
+                            oc_guess_count[chosen] += 1
+                            penpal_guess_count += 1
+                            context_logs.append(
+                                f"[笔友] 行{data_start + idx + 2} → {chosen}（与 {sender} 唯一往来）"
+                            )
+                        else:
+                            unguessed_count += 1
 
-            new_lines.append('\t'.join(cols) + '\n')
+            new_lines.append("\t".join(cols) + "\n")
 
         with open(global_result_path, "w", encoding="utf-8") as f:
             for line in new_lines:
-                f.write(line if line.endswith('\n') else line + '\n')
+                f.write(line if line.endswith("\n") else line + "\n")
 
-        if empty_inbound == 0:
+        bits = []
+        if repaired_type:
+            bits.append(f"回填空类型 {repaired_type} 处")
+        if cleared_collective:
+            bits.append(f"清除套话收件人 {cleared_collective} 处")
+        if penpal_guess_count:
+            bits.append(f"唯一笔友猜测 {penpal_guess_count} 封")
+        repair_hint = ("；" + "，".join(bits)) if bits else ""
+
+        if empty_inbound == 0 and changed == 0:
             summary = (
                 f"收件人：没有需要补全的空缺"
-                f"（已检查 {already_had} 封收信，收件人栏都已有值；"
+                f"（已检查 {already_had} 封收信，收件人栏都已有值）{repair_hint}。"
             )
         elif changed == 0 and unguessed_count == 0:
-            summary = "收件人：没有改动。"
+            summary = f"收件人：没有改动{repair_hint}。"
         else:
-            detail = "\n".join([f"{oc}：补全 {oc_guess_count[oc]} 封" for oc in oc_names])
+            detail = "\n".join([f"{oc}：补全 {oc_guess_count[oc]} 封" for oc in oc_names if oc_guess_count[oc]])
             summary = (
-                f"收件人：在 {empty_inbound} 封空缺里补全了 {changed} 封"
-                + (f"。\n{detail}" if detail else "")
-                + (f"\n还有 {unguessed_count} 封空着、认不出来，可到「库存」里手工改。" if unguessed_count else "。")
+                f"收件人：在 {empty_inbound} 封空缺里补全了相关字段（含修补）共改动 {changed} 处"
+                + repair_hint
+                + (f"。\n{detail}" if detail else "。")
+                + (f"\n还有 {unguessed_count} 封空着、认不出来，可到「库存」里手工改。" if unguessed_count else "")
             )
         log_text = summary + "\n" + "\n".join(context_logs)
         self.add_work_log(log_text)
@@ -3127,7 +3295,7 @@ class EmailDownloaderGUI:
         guide.pack(fill=tk.X, pady=4)
         guide_text = (
             "1. 打开你的邮箱网页版 → 设置，搜索「IMAP」或「授权码」。\n"
-            "2. 开启 IMAP 服务，按提示用短信等方式生成授权码（为了信息安全，请不尽量避免暴露授权码！）。\n"
+            "2. 开启 IMAP 服务，按提示用短信等方式生成授权码（为了信息安全，请尽量避免暴露授权码！）。\n"
             "3. 如果授权码有日期限制，请选「全部」，否则授权码到期后需要重复上述操作。\n"
             "4. 把邮箱地址和授权码填到下面，选好邮箱类型，点「登录」。"
         )
@@ -3521,7 +3689,7 @@ class EmailDownloaderGUI:
     def _confirm_missing_receiver(self, parent=None):
         return messagebox.askyesno(
             "收件人未填",
-            "收件人为空。\n入库后可由补全收件人推测（A/B 按当时已登记的 OC，C 按正文「致…」），"
+            "收件人为空。\n入库后可由补全收件人推测（A/B 按当时已登记的 OC，C 按正文对照角色名/别名），"
             "推测不到的会显示为 [未知的收信人]。\n\n仍要继续吗？",
             parent=parent or self.root,
         )
@@ -4711,15 +4879,14 @@ class EmailDownloaderGUI:
         help_box.pack(fill=tk.X, pady=6)
         help_text = (
             "收信时，缺少足够分清「这封信究竟寄给谁」的规则，因此做了如下猜测。\n"
-            "只处理「收」且收件人栏为空的行；已有收件人的不会改。\n"
-            "· 只登记了一个角色：必然发给此角色，空缺直接填成该角色。\n"
+            "· 只登记了一个角色：空缺直接填成该角色。\n"
             "· 多个角色时：\n"
-            "  - A / B 信：填所有「注册日期 ≤ 发信日期」的角色（A 信面向所有注册者）。\n"
-            "  - C / A+C 信：在正文 content.txt 里检索角色主名及其别名；"
-            "命中别名会归到主名，能唯一确定才填主名。\n"
-            "· 发信的收件人多半在入库时已从 C 信类型等规则写出；这里主要补收信。\n"
-            "因此「新下载了几封」和「补全了几封」不是一回事：收件人已经写好时，"
-            "摘要会写「没有需要补全的空缺」。"
+            "  - A / B / A+B / B+C：填所有「注册日期 ≤ 发信日期」的角色"
+            "（广播；正文「致诸位/大家」等集体套话不当人名，会清掉再按此规则填）。\n"
+            "  - C / A+C：正文对照已登记角色/别名，能唯一确定才填；再不行则唯一笔友往来。"
+            "不从「致…」后面整段抠人名。\n"
+            "· 顺带修补：空类型从路径回填；发 C 从类型写收件人。\n"
+            "因此「新下载了几封」和「补全了几封」不是一回事。"
         )
         ttk.Label(help_box, text=help_text, justify=tk.LEFT, wraplength=500).pack(anchor=tk.W)
 
@@ -4836,7 +5003,7 @@ class EmailDownloaderGUI:
         self.inv_tree.bind("<Double-1>", self._on_inv_tree_double_click)
         ttk.Label(
             self.inventory_frame,
-            text="双击一封信可打开本地 content.txt 正文（不联网）",
+            text="双击一封信可打开本地 content.txt 正文",
             foreground="gray",
         ).pack(anchor=tk.W)
 
